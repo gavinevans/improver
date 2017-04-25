@@ -56,7 +56,8 @@ class BasicThreshold(object):
             The threshold point for 'significant' datapoints.
 
         fuzzy_factor : float
-            Percentage above or below threshold for fuzzy membership value.
+            Fraction of threshold value to be above or below threshold
+            to define fuzzy membership.
 
         below_thresh_ok : boolean
             True to count points as significant if *below* the threshold,
@@ -92,11 +93,12 @@ class BasicThreshold(object):
 
         """
         lower_threshold = self.threshold * self.fuzzy_factor
+        upper_threshold = self.threshold * (2. - self.fuzzy_factor)
         if np.isnan(cube.data).any():
             raise ValueError("Error: NaN detected in input cube data")
         truth_value = (
             (cube.data - lower_threshold) /
-            ((self.threshold * (2. - self.fuzzy_factor)) - lower_threshold)
+            (upper_threshold - lower_threshold)
         )
         truth_value = np.clip(truth_value, 0., 1.)
         if self.below_thresh_ok:
