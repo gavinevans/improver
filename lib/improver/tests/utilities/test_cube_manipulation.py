@@ -1011,8 +1011,7 @@ class Test_build_coordinate(IrisTest):
         self.assertEqual(result.units, Unit("m"))
         self.assertArrayAlmostEqual(result.bounds, np.array([[0.5, 1.5]]))
         self.assertArrayAlmostEqual(result.points, np.array([1.0]))
-        self.assertEqual(
-            result.coord_system, TransverseMercator)
+        self.assertEqual(result.coord_system, TransverseMercator)
 
     def test_template_coord(self):
         """Test that a coordinate can be built from a template coordinate."""
