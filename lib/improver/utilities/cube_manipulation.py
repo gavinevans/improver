@@ -263,7 +263,13 @@ def equalise_cube_attributes(cubes):
         Warning: If it does not know what to do with an unmatching
                  attribute. Default is to delete it.
     """
-    unmatching_attributes = compare_attributes(cubes)
+    if len(cubes) == 1:
+        unmatching_attributes = []
+        msg = ('Only a single cube so no differences will be found ')
+        warnings.warn(msg)
+    else:
+        unmatching_attributes = compare_attributes(cubes)
+
     if len(unmatching_attributes) > 0:
         for i, cube in enumerate(cubes):
             # Remove history.
@@ -315,7 +321,13 @@ def equalise_cube_coords(cubes):
         ValueError: If Threshold coordinates do not match.
         ValueError: If model_id has more than one point.
     """
-    unmatching_coords = compare_coords(cubes)
+    if len(cubes) == 1:
+        unmatching_coords = []
+        msg = ('Only a single cube so no differences will be found ')
+        warnings.warn(msg)
+    else:
+        unmatching_coords = compare_coords(cubes)
+
     if len(unmatching_coords) == 0:
         cubelist = cubes
     else:
@@ -407,24 +419,20 @@ def compare_attributes(cubes):
         Warning: If only a single cube is supplied
     """
     unmatching_attributes = []
-    if isinstance(cubes, iris.cube.Cube) or len(cubes) == 1:
-        msg = ('Only a single cube so no differences will be found ')
-        warnings.warn(msg)
-    else:
-        common_keys = cubes[0].attributes.keys()
-        for cube in cubes[1:]:
-            cube_keys = cube.attributes.keys()
-            common_keys = [
-                key for key in common_keys
-                if (key in cube_keys and
-                    np.all(cube.attributes[key] == cubes[0].attributes[key]))]
+    common_keys = cubes[0].attributes.keys()
+    for cube in cubes[1:]:
+        cube_keys = cube.attributes.keys()
+        common_keys = [
+            key for key in common_keys
+            if (key in cube_keys and
+                np.all(cube.attributes[key] == cubes[0].attributes[key]))]
 
-        for i, cube in enumerate(cubes):
-            unmatching_attributes.append(dict())
-            for key in cube.attributes.keys():
-                if key not in common_keys:
-                    unmatching_attributes[i].update({key:
-                                                     cube.attributes[key]})
+    for i, cube in enumerate(cubes):
+        unmatching_attributes.append(dict())
+        for key in cube.attributes.keys():
+            if key not in common_keys:
+                unmatching_attributes[i].update({key:
+                                                  cube.attributes[key]})
     return unmatching_attributes
 
 
@@ -444,35 +452,30 @@ def compare_coords(cubes):
         Warning: If only a single cube is supplied
     """
     unmatching_coords = []
-    if isinstance(cubes, iris.cube.Cube) or len(cubes) == 1:
-        msg = ('Only a single cube so no differences will be found ')
-        warnings.warn(msg)
-    else:
-        common_coords = cubes[0].coords()
-        for cube in cubes[1:]:
-            cube_coords = cube.coords()
-            common_coords = [
-                coord for coord in common_coords
-                if (coord in cube_coords and
-                    np.all(cube.coords(coord) == cubes[0].coords(coord)))]
+    common_coords = cubes[0].coords()
+    for cube in cubes[1:]:
+        cube_coords = cube.coords()
+        common_coords = [
+            coord for coord in common_coords
+            if (coord in cube_coords and
+                np.all(cube.coords(coord) == cubes[0].coords(coord)))]
 
-        for i, cube in enumerate(cubes):
-            unmatching_coords.append(dict())
-            for coord in cube.coords():
-                if coord not in common_coords:
-                    dim_coords = cube.dim_coords
-                    if coord in dim_coords:
-                        dim_val = dim_coords.index(coord)
-                    else:
-                        dim_val = None
-                    aux_val = None
-                    if dim_val is None and len(cube.coord_dims(coord)) > 0:
-                        aux_val = cube.coord_dims(coord)[0]
-                    unmatching_coords[i].update({coord.name():
-                                                 {'data_dims': dim_val,
-                                                  'aux_dims': aux_val,
-                                                  'coord': coord}})
-
+    for i, cube in enumerate(cubes):
+        unmatching_coords.append(dict())
+        for coord in cube.coords():
+            if coord not in common_coords:
+                dim_coords = cube.dim_coords
+                if coord in dim_coords:
+                    dim_val = dim_coords.index(coord)
+                else:
+                    dim_val = None
+                aux_val = None
+                if dim_val is None and len(cube.coord_dims(coord)) > 0:
+                    aux_val = cube.coord_dims(coord)[0]
+                unmatching_coords[i].update({coord.name():
+                                              {'data_dims': dim_val,
+                                              'aux_dims': aux_val,
+                                              'coord': coord}})
     return unmatching_coords
 
 

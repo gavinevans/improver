@@ -903,27 +903,27 @@ class Test_compare_attributes(IrisTest):
         self.assertIsInstance(result1, list)
         self.assertAlmostEquals(result1, [{}, {}])
 
-    def test_warning(self):
-        """Test that the utility returns warning if only one cube supplied."""
-        with warnings.catch_warnings(record=True) as warning_list:
-            warnings.simplefilter("always")
-            result = compare_attributes(self.cube)
-            self.assertTrue(any(item.category == UserWarning
-                                for item in warning_list))
-            warning_msg = "Only a single cube so no differences will be found "
-            self.assertTrue(any(warning_msg in str(item)
-                                for item in warning_list))
-            self.assertAlmostEquals(result, [])
-        with warnings.catch_warnings(record=True) as warning_list:
-            warnings.simplefilter("always")
-            result = (
-                compare_attributes(iris.cube.CubeList([self.cube])))
-            self.assertTrue(any(item.category == UserWarning
-                                for item in warning_list))
-            warning_msg = "Only a single cube so no differences will be found "
-            self.assertTrue(any(warning_msg in str(item)
-                                for item in warning_list))
-            self.assertAlmostEquals(result, [])
+    #def test_warning(self):
+        #"""Test that the utility returns warning if only one cube supplied."""
+        #with warnings.catch_warnings(record=True) as warning_list:
+            #warnings.simplefilter("always")
+            #result = compare_attributes(self.cube)
+            #self.assertTrue(any(item.category == UserWarning
+                                #for item in warning_list))
+            #warning_msg = "Only a single cube so no differences will be found "
+            #self.assertTrue(any(warning_msg in str(item)
+                                #for item in warning_list))
+            #self.assertAlmostEquals(result, [])
+        #with warnings.catch_warnings(record=True) as warning_list:
+            #warnings.simplefilter("always")
+            #result = (
+                #compare_attributes(iris.cube.CubeList([self.cube])))
+            #self.assertTrue(any(item.category == UserWarning
+                                #for item in warning_list))
+            #warning_msg = "Only a single cube so no differences will be found "
+            #self.assertTrue(any(warning_msg in str(item)
+                                #for item in warning_list))
+            #self.assertAlmostEquals(result, [])
 
     def test_history_attribute(self):
         """Test that the utility returns diff when history do not match"""
@@ -970,19 +970,19 @@ class Test_compare_coords(IrisTest):
         result = compare_coords(cubelist)
         self.assertIsInstance(result, list)
 
-    def test_catch_warning(self):
-        """Test that a warning is raised if the input is a cube, or a cubelist
-        of length 1."""
-        cube = self.cube.copy()
-        with warnings.catch_warnings(record=True) as warning_list:
-            warnings.simplefilter("always")
-            result = compare_coords(cube)
-            self.assertTrue(any(item.category == UserWarning
-                                for item in warning_list))
-            warning_msg = "Only a single cube so no differences will be found "
-            self.assertTrue(any(warning_msg in str(item)
-                                for item in warning_list))
-            self.assertAlmostEquals(result, [])
+    #def test_catch_warning(self):
+        #"""Test that a warning is raised if the input is a cube, or a cubelist
+        #of length 1."""
+        #cube = self.cube.copy()
+        #with warnings.catch_warnings(record=True) as warning_list:
+            #warnings.simplefilter("always")
+            #result = compare_coords(cube)
+            #self.assertTrue(any(item.category == UserWarning
+                                #for item in warning_list))
+            #warning_msg = "Only a single cube so no differences will be found "
+            #self.assertTrue(any(warning_msg in str(item)
+                                #for item in warning_list))
+            #self.assertAlmostEquals(result, [])
 
     def test_first_cube_has_extra_dimension_coordinates(self):
         """Test for comparing coordinate between cubes, where the first
