@@ -62,6 +62,7 @@ from improver.tests.ensemble_calibration.ensemble_calibration.\
     helper_functions import (
         set_up_temperature_cube,
         set_up_probability_above_threshold_temperature_cube,
+        set_up_percentile_temperature_cube,
         add_forecast_reference_time_and_forecast_period)
 
 
@@ -784,8 +785,98 @@ class Test_equalise_cube_coords(IrisTest):
 
     def test_basic(self):
         """Test that the utility returns an iris.cube.Cube."""
-        result = equalise_cube_coords(self.cube)
-        self.assertIsInstance(result, Cube)
+        with warnings.catch_warnings(record=True) as warning_list:
+            warnings.simplefilter("always")
+            result = equalise_cube_coords(self.cube)
+            self.assertTrue(any(item.category == UserWarning
+                                for item in warning_list))
+            warning_msg = "Only a single cube so no differences will be found "
+            self.assertTrue(any(warning_msg in str(item)
+                                for item in warning_list))
+            self.assertIsInstance(result, Cube)
+
+    def test_percentile_over_exception(self):
+        """Test that an exception is raised if a 'percentile_over' coordinate
+        is unmatched."""
+        cube = set_up_percentile_temperature_cube()
+        cube1 = cube.copy()
+        cube2 = cube.copy()
+        cube2.remove_coord("percentile_over_realization")
+        cubes = iris.cube.CubeList([cube1, cube2])
+        msg = "Percentile coordinates must match to merge"
+        with self.assertRaisesRegexp(ValueError, msg):
+            equalise_cube_coords(cubes)
+
+    def test_threshold_exception(self):
+        """Test that an exception is raised if a threshold coordinate is
+        unmatched."""
+        cube = set_up_probability_above_threshold_temperature_cube()
+        cube1 = cube.copy()
+        cube2 = cube.copy()
+        cube2.remove_coord("threshold")
+        cubes = iris.cube.CubeList([cube1, cube2])
+        msg = "Threshold coordinates must match to merge"
+        with self.assertRaisesRegexp(ValueError, msg):
+            equalise_cube_coords(cubes)
+
+    def test_model_id_without_realization(self):
+        """Test that if model_id is an unmatched coordinate, and the cubes
+        do not have a realization coordinate."""
+        cube1 = self.cube.copy()[0]
+        cube2 = self.cube.copy()[0]
+        cube1.remove_coord("realization")
+        cube2.remove_coord("realization")
+        model_id_coord = DimCoord(
+            np.array([100*1], np.int), long_name='model_id')
+        cube1.add_aux_coord(model_id_coord)
+        cube1 = iris.util.new_axis(cube1)
+        cubes = iris.cube.CubeList([cube1, cube2])
+        cubelist = equalise_cube_coords(cubes)
+
+    def test_model_id_with_realization_exception(self):
+        """Test that an exception is raised if a cube has multiple model_id
+        points."""
+        cube1 = self.cube.copy()
+        model_id_coord = DimCoord(
+            np.array([100], np.int), long_name='model_id')
+        cube1.add_aux_coord(model_id_coord)
+        cube1 = iris.util.new_axis(cube1, "model_id")
+        cube2 = cube1.copy()
+        cube2.coord("model_id").points = 200
+        cube1 = iris.cube.CubeList([cube1, cube2]).concatenate_cube()
+        cube2 = self.cube.copy()[0]
+        cube2.remove_coord("realization")
+        cubes = iris.cube.CubeList([cube1, cube2])
+        msg = "Model_id has more than one point"
+        with self.assertRaisesRegexp(ValueError, msg):
+            equalise_cube_coords(cubes)
+
+    def test_model_id_with_realization_in_cube(self):
+        """Test if model_id is an unmatched coordinate, a cube has a
+        realization coordinate and the cube being inspected has a realization
+        coordinate."""
+        cube1 = self.cube.copy()
+        cube2 = self.cube.copy()[0]
+        cube2.remove_coord("realization")
+        model_id_coord = DimCoord(
+            np.array([100*1], np.int), long_name='model_id')
+        cube1.add_aux_coord(model_id_coord)
+        cube1 = iris.util.new_axis(cube1, "model_id")
+        cubes = iris.cube.CubeList([cube1, cube2])
+        cubelist = equalise_cube_coords(cubes)
+
+    def test_model_id_with_realization_not_in_cube(self):
+        """Test if model_id is an unmatched coordinate, a cube has a
+        realization coordinate and the cube being inspected does not have a
+        realization coordinate."""
+        cube1 = self.cube.copy()
+        cube2 = self.cube.copy()
+        model_id_coord = DimCoord(
+            np.array([100*1], np.int), long_name='model_id')
+        cube2.add_aux_coord(model_id_coord)
+        cube2 = iris.util.new_axis(cube2, "model_id")
+        cubes = iris.cube.CubeList([cube1, cube2])
+        cubelist = equalise_cube_coords(cubes)
 
 
 class Test_compare_attributes(IrisTest):
