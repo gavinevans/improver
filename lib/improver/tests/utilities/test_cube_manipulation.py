@@ -933,7 +933,6 @@ class Test_compare_attributes(IrisTest):
         self.assertIsInstance(result1, list)
         self.assertAlmostEquals(result1, [{}, {}])
 
-
     def test_history_attribute(self):
         """Test that the utility returns diff when history do not match"""
         cube1 = self.cube.copy()

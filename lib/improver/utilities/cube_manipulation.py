@@ -476,9 +476,9 @@ def compare_coords(cubes):
                 if dim_val is None and len(cube.coord_dims(coord)) > 0:
                     aux_val = cube.coord_dims(coord)[0]
                 unmatching_coords[i].update({coord.name():
-                                              {'data_dims': dim_val,
-                                              'aux_dims': aux_val,
-                                              'coord': coord}})
+                                            {'data_dims': dim_val,
+                                             'aux_dims': aux_val,
+                                             'coord': coord}})
     return unmatching_coords
 
 
