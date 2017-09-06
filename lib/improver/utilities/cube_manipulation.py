@@ -431,8 +431,7 @@ def compare_attributes(cubes):
         unmatching_attributes.append(dict())
         for key in cube.attributes.keys():
             if key not in common_keys:
-                unmatching_attributes[i].update({key:
-                                                  cube.attributes[key]})
+                unmatching_attributes[i].update({key: cube.attributes[key]})
     return unmatching_attributes
 
 
