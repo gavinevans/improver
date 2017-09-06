@@ -310,6 +310,11 @@ def equalise_cube_coords(cubes):
     """
     Function to equalise coordinates that do not match.
 
+    If the input cubes contain coordinates that do not match between the input
+    cubes and these coordinates are dimension coordinates or auxiliary
+    coordinates, then these coordinates are sliced over prior to appending
+    to the resulting cubelist.
+
     Args:
         cubes : Iris cubelist
             List of cubes to check the coords and revise.
@@ -365,8 +370,7 @@ def equalise_cube_coords(cubes):
                         if cube.coords('realization'):
                             unmatch = unmatching_coords[i]['realization']
                             if unmatch['data_dims'] >= 0:
-                                data_dims = (
-                                    unmatch['data_dims'])
+                                data_dims = unmatch['data_dims']
                             else:
                                 data_dims = None
                             new_model_real_coord = (
