@@ -6,8 +6,6 @@ language: python
 python:
   - 2.7.12
 sudo: false
-dist: trusty
-group: deprecated-2017Q4
 
 git:
   depth: 10000
@@ -32,7 +30,7 @@ install:
   - source activate $ENV_NAME
 
   # Download Iris 1.13 and all dependencies.
-  - conda install -c conda-forge iris=1.13
+  - conda install --debug -c conda-forge iris=1.13
 
   # Force numpy to remain at version 1.11.1
   - conda install -c conda-forge numpy=1.11.1
