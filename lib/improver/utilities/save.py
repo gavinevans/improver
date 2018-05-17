@@ -52,7 +52,7 @@ def save_netcdf(cubelist, filename):
     global_keys = ['title', 'um_version', 'grid_id', 'source', 'Conventions',
                    'institution', 'history']
     local_keys = {key for cube in cubelist
-                  for key in cube.attributes.keys()
+                  for key in list(cube.attributes.keys())
                   if key not in global_keys}
 
     iris.fileformats.netcdf.save(cubelist, filename, local_keys=local_keys)

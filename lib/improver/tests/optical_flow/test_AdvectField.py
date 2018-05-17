@@ -80,7 +80,7 @@ class Test__init__(IrisTest):
         vel_y = set_up_xy_velocity_cube("advection_velocity_y",
                                         coord_points_y=2*np.arange(4))
         msg = "Velocity cubes on unmatched grids"
-        with self.assertRaisesRegexp(InvalidCubeError, msg):
+        with self.assertRaisesRegex(InvalidCubeError, msg):
             _ = AdvectField(vel_x, vel_y)
 
 
@@ -113,13 +113,13 @@ class Test__check_input_coords(IrisTest):
         vel2.add_aux_coord(DimCoord(2, standard_name="realization"))
         invalid_3d, = (iris.cube.CubeList([vel1, vel2])).merge()
         msg = "Cube has 3"
-        with self.assertRaisesRegexp(InvalidCubeError, msg):
+        with self.assertRaisesRegex(InvalidCubeError, msg):
             self.plugin._check_input_coords(invalid_3d)
 
     def test_time(self):
         """Test rejects cube without time coord"""
         msg = "Input cube has no time coordinate"
-        with self.assertRaisesRegexp(InvalidCubeError, msg):
+        with self.assertRaisesRegex(InvalidCubeError, msg):
             self.plugin._check_input_coords(self.valid, require_time=True)
 
 
@@ -298,7 +298,7 @@ class Test_process(IrisTest):
         cube.add_aux_coord(self.time_coord)
 
         msg = "Input data grid does not match advection velocities"
-        with self.assertRaisesRegexp(InvalidCubeError, msg):
+        with self.assertRaisesRegex(InvalidCubeError, msg):
             self.plugin.process(cube, self.timestep)
 
     def test_validity_time(self):

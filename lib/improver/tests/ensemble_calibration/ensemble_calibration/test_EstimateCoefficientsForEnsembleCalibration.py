@@ -398,7 +398,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
         optimised_coeffs, coeff_names = result
         self.assertIsInstance(optimised_coeffs, dict)
         self.assertIsInstance(coeff_names, list)
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertEqual(
                 len(optimised_coeffs[key]), len(coeff_names))
 
@@ -428,7 +428,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs, coeff_names = result
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
         self.assertListEqual(coeff_names, ["gamma", "delta", "a", "beta"])
 
@@ -460,7 +460,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs, coeff_names = result
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
         self.assertListEqual(coeff_names, ["gamma", "delta", "a", "beta"])
 
@@ -506,7 +506,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs, coeff_names = result
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
         self.assertListEqual(coeff_names, ["gamma", "delta", "a", "beta"])
 
@@ -551,7 +551,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
         result = plugin.estimate_coefficients_for_ngr(
             current_forecast, historic_forecasts, truth)
         optimised_coeffs, coeff_names = result
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
         self.assertListEqual(coeff_names, ["gamma", "delta", "a", "beta"])
 
@@ -573,7 +573,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
 
         plugin = Plugin(distribution, desired_units)
         msg = "Distribution requested"
-        with self.assertRaisesRegexp(KeyError, msg):
+        with self.assertRaisesRegex(KeyError, msg):
             plugin.estimate_coefficients_for_ngr(
                 current_forecast, historic_forecasts, truth)
 
@@ -603,7 +603,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs = result[0]
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
 
     @ManageWarnings(
@@ -632,7 +632,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs = result[0]
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
 
     @ManageWarnings(
@@ -661,7 +661,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs = result[0]
 
-        for key in optimised_coeffs.keys():
+        for key in list(optimised_coeffs.keys()):
             self.assertArrayAlmostEqual(optimised_coeffs[key], data)
 
     def test_truth_data_is_none(self):
@@ -680,7 +680,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
 
         plugin = Plugin(distribution, desired_units)
         msg = "The input data within the"
-        with self.assertRaisesRegexp(TypeError, msg):
+        with self.assertRaisesRegex(TypeError, msg):
             plugin.estimate_coefficients_for_ngr(
                 current_forecast, historic_forecasts, truth)
 
@@ -709,7 +709,7 @@ class Test_estimate_coefficients_for_ngr(IrisTest):
             current_forecast, historic_forecasts, truth)
         optimised_coeffs, coeff_names = result
         self.assertFalse(optimised_coeffs)
-        self.assertItemsEqual(coeff_names, desired_coeff_names)
+        self.assertCountEqual(coeff_names, desired_coeff_names)
 
     @ManageWarnings(record=True)
     def test_current_forecast_cubes_is_fake_catch_warning(self,
