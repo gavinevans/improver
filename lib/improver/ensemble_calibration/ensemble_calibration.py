@@ -51,8 +51,11 @@ from improver.utilities.warnings_handler import ManageWarnings
 IGNORED_MESSAGES = ["The pandas.core.datetools module is deprecated",
                     "numpy.dtype size changed",
                     "Not importing directory .*sphinxcontrib'",
-                    "The statsmodels can not be imported"]
-WARNING_TYPES = [FutureWarning, RuntimeWarning, ImportWarning, ImportWarning]
+                    "The statsmodels can not be imported",
+                    "invalid escape sequence",
+                    "can't resolve package from"]
+WARNING_TYPES = [FutureWarning, RuntimeWarning, ImportWarning, ImportWarning,
+                 DeprecationWarning, ImportWarning]
 
 
 class ContinuousRankedProbabilityScoreMinimisers(object):
