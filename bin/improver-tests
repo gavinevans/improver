@@ -150,7 +150,8 @@ if [[ -n "$SUBTESTS" ]]; then
     TESTS="$SUBTESTS"
 else
     # Default tests.
-    TESTS="pycodestyle pylintE doc unit cli"
+    #TESTS="pycodestyle pylintE doc unit cli"
+    TESTS="unit"
 fi
 
 # If cli sub test is not specified by user, do all cli tests.
