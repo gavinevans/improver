@@ -158,6 +158,7 @@ def main():
         result_collapse_coord = BlendingPlugin.process(
             result_no_collapse_coord, weights)
         print(result_collapse_coord)
+        print(args.output_filepath)
         save_netcdf(result_collapse_coord, args.output_filepath)
 
 
