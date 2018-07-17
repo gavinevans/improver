@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -32,11 +32,12 @@
 """Neighbour finding for the Improver site specific process chain."""
 
 import numpy as np
-from improver.spotdata.read_input import data_from_dictionary
+from improver.utilities.spatial import (
+    get_nearest_coords, lat_lon_determine, lat_lon_transform)
 from improver.spotdata.common_functions import (
-    ConditionalListExtract, nearest_n_neighbours, get_nearest_coords,
-    index_of_minimum_difference, list_entry_from_index, node_edge_test,
-    apply_bias, xy_test, xy_transform, isclose)
+    ConditionalListExtract, nearest_n_neighbours,
+    index_of_minimum_difference, list_entry_from_index, node_edge_check,
+    apply_bias)
 
 
 class PointSelection(object):
@@ -64,19 +65,18 @@ class PointSelection(object):
         the grid points closest to sites of interest.
 
         Args:
-        -----
-        method : string
-            Name of the method of neighbour finding to be used.
+            method (string):
+                Name of the method of neighbour finding to be used.
 
-        vertical_bias : string/None
-            Sets the preferred vertical displacement bias of the grid point
-            relative to the site; above/below/None. If this criteria cannot be
-            met (e.g. bias below, but all grid points above site) the smallest
-            vertical displacment neighbour will be returned.
+            vertical_bias (string or None):
+                Sets the preferred vertical displacement bias of the grid point
+                relative to the site; above/below/None. If this criteria cannot
+                be met (e.g. bias below, but all grid points above site) the
+                smallest vertical displacment neighbour will be returned.
 
-        land_constraint : boolean
-            If True spot data sites on land should only select neighbouring
-            grid points also over land.
+            land_constraint (boolean):
+                If True spot data sites on land should only select neighbouring
+                grid points also over land.
 
         """
         self.method = method
@@ -90,48 +90,50 @@ class PointSelection(object):
         after preparing the necessary diagnostics to be passed in.
 
         Args:
-        -----
-        cube : iris.cube.Cube
-            Cube of gridded data of a diagnostic; the diagnostic is unimportant
-            as long as the grid is structured in the same way as those from
-            which data will be extracted using the neighbour list.
+            cube (iris.cube.Cube):
+                Cube of gridded data of a diagnostic; the diagnostic is
+                unimportant as long as the grid is structured in the same way
+                as those from which data will be extracted using the neighbour
+                list.
+            sites (OrderedDict):
+                Site data, including latitude/longitude and altitude
+                information.
+                e.g.::
 
-        sites : OrderedDict
-            Site data, including latitude/longitude and altitude information.
-            e.g. {<site_id>: {'latitude': 50, 'longitude': 0, 'altitude': 10}}
+                  {<site_id>: {'latitude': 50, 'longitude': 0,
+                               'altitude': 10}}
+            ancillary_data (dict):
+                Dictionary of ancillary (time invariant) model data that is
+                needed.
+                e.g.::
 
-        ancillary_data : dict
-            Dictionary of ancillary (time invariant) model data that is needed.
-            e.g. {'orography': <cube of orography>}
-
-        default_neighbours/no_neighbours : see minimum_height_error_neighbour()
-                                           below.
+                  {'orography': <cube of orography>}
+            default_neighbours/no_neighbours :
+                see minimum_height_error_neighbour() below.
 
         Returns:
-        --------
-        neighbours : numpy.dtype (fields: i, j, dz, edgepoint)
-            Array of grid i,j coordinates that are nearest to each site
-            coordinate given. Includes vertical displacement between site and
-            returned grid point if orography is provided. Edgepoint is a
-            boolean that indicates if the chosen grid point neighbour is on the
-            edge of the domain for a circular (e.g. global cylindrical) grid.
+            neighbours (numpy.dtype):
+                Array of grid i,j coordinates that are nearest to each site
+                coordinate given. Includes vertical displacement between site
+                and returned grid point if orography is provided. Edgepoint is
+                a boolean that indicates if the chosen grid point neighbour is
+                on the edge of the domain for a circular (e.g. global
+                cylindrical) grid; (fields: i, j, dz, edgepoint).
 
         """
         if self.method == 'fast_nearest_neighbour':
             if 'orography' in ancillary_data.keys():
-                orography = data_from_dictionary(
-                    ancillary_data, 'orography').data
+                orography = ancillary_data['orography'].data
             else:
                 orography = None
             return self.fast_nearest_neighbour(cube, sites,
                                                orography=orography)
         elif self.method == 'minimum_height_error_neighbour':
-            orography = data_from_dictionary(ancillary_data, 'orography').data
+            orography = ancillary_data['orography'].data
 
             land_mask = None
             if self.land_constraint:
-                land_mask = data_from_dictionary(
-                    ancillary_data, 'land_mask').data
+                land_mask = ancillary_data['land_mask'].data
 
             return self.minimum_height_error_neighbour(
                 cube, sites, orography, land_mask=land_mask,
@@ -155,17 +157,16 @@ class PointSelection(object):
 
 
         Args:
-        -----
-        cube/sites : See process() above.
+            cube/sites : See process() above.
 
-        orography : numpy.array
-            Array of orography data extracted from an iris.cube.Cube that
-            corresponds to the grids on which all other input diagnostics
-            will be provided (iris.cube.Cube.data).
+            orography (numpy.array):
+                Array of orography data extracted from an iris.cube.Cube that
+                corresponds to the grids on which all other input diagnostics
+                will be provided (iris.cube.Cube.data).
 
         Returns:
-        --------
-        neighbours: See process() above.
+            neighbours (numpy.array):
+                See process() above.
 
         """
         neighbours = np.empty(len(sites), dtype=[('i', 'i8'),
@@ -174,24 +175,32 @@ class PointSelection(object):
                                                  ('edgepoint', 'bool_')])
 
         # Check cube coords are lat/lon, else transform lookup coordinates.
-        trg_crs = xy_test(cube)
+        trg_crs = lat_lon_determine(cube)
 
         imax = cube.coord(axis='y').shape[0]
         jmax = cube.coord(axis='x').shape[0]
         iname = cube.coord(axis='y').name()
         jname = cube.coord(axis='x').name()
 
-        for i_site, site in enumerate(sites.itervalues()):
+        for i_site, site in enumerate(sites.values()):
             latitude, longitude, altitude = (site['latitude'],
                                              site['longitude'],
                                              site['altitude'])
 
-            longitude, latitude = xy_transform(trg_crs, latitude, longitude)
+            longitude, latitude = lat_lon_transform(trg_crs,
+                                                    latitude, longitude)
             i_latitude, j_longitude = get_nearest_coords(
                 cube, latitude, longitude, iname, jname)
             dz_site_grid = 0.
-            if orography is not None:
+
+            # Calculate SpotData site vertical displacement from model
+            # orography. If site altitude set with np.nan or orography data
+            # is unavailable, assume site is at equivalent altitude to nearest
+            # neighbour.
+            if orography is not None and altitude != np.nan:
                 dz_site_grid = altitude - orography[i_latitude, j_longitude]
+            else:
+                dz_site_grid = 0.
 
             neighbours[i_site] = (int(i_latitude), int(j_longitude),
                                   dz_site_grid,
@@ -223,32 +232,31 @@ class PointSelection(object):
         other sea points.
 
         Args:
-        -----
-        cube/sites : See process() above.
+            cube/sites : See process() above.
 
-        default_neighbours : numpy.array
-            An existing list of neighbours from which variations are made using
-            specified options (e.g. land_constraint). If unset the
-            fast_nearest_neighbour method will be used to build this list.
+            default_neighbours (numpy.array):
+                An existing list of neighbours from which variations are made
+                using specified options (e.g. land_constraint). If unset the
+                fast_nearest_neighbour method will be used to build this list.
 
-        orography : numpy.array
-            Array of orography data extracted from an iris.cube.Cube that
-            corresponds to the grids on which all other input diagnostics
-            will be provided.
+            orography (numpy.array):
+                Array of orography data extracted from an iris.cube.Cube that
+                corresponds to the grids on which all other input diagnostics
+                will be provided.
 
-        land_mask : numpy.array
-            Array of land_mask data extracted from an iris.cube.Cube that
-            corresponds to the grids on which all other input diagnostics
-            will be provided.
+            land_mask (numpy.array):
+                Array of land_mask data extracted from an iris.cube.Cube that
+                corresponds to the grids on which all other input diagnostics
+                will be provided.
 
-        no_neighbours : int
-            Number of grid points about the site to consider when relaxing the
-            nearest neighbour condition. If unset this defaults to 9.
-            e.g. consider a 5x5 grid of points -> no_neighbours = 25.
+            no_neighbours (int):
+                Number of grid points about the site to consider when relaxing
+                the nearest neighbour condition. If unset this defaults to 9.
+                e.g. consider a 5x5 grid of points -> no_neighbours = 25.
 
         Returns:
-        --------
-        neighbours: See process() above.
+            neighbours (numpy.array):
+                See process() above.
 
         """
 
@@ -261,9 +269,13 @@ class PointSelection(object):
         else:
             neighbours = default_neighbours
 
-        for i_site, site in enumerate(sites.itervalues()):
+        for i_site, site in enumerate(sites.values()):
 
             altitude = site['altitude']
+
+            # If site altitude is set with np.nan this method cannot be used.
+            if altitude == np.nan:
+                continue
 
             i, j, dz_nearest = (neighbours['i'][i_site],
                                 neighbours['j'][i_site],
@@ -272,7 +284,7 @@ class PointSelection(object):
 
             node_list = nearest_n_neighbours(i, j, no_neighbours)
             if edgepoint:
-                node_list = node_edge_test(node_list, cube)
+                node_list = node_edge_check(node_list, cube)
 
             if self.land_constraint:
                 # Check that we are considering a land point and that at least
@@ -282,7 +294,7 @@ class PointSelection(object):
                 neighbour_nodes = nearest_n_neighbours(i, j, no_neighbours,
                                                        exclude_self=True)
                 if edgepoint:
-                    neighbour_nodes = node_edge_test(neighbour_nodes, cube)
+                    neighbour_nodes = node_edge_check(neighbour_nodes, cube)
                 if not land_mask[i, j] or not any(land_mask[neighbour_nodes]):
                     continue
 
@@ -301,7 +313,7 @@ class PointSelection(object):
             # Test to ensure that if multiple vertical displacements are the
             # same we don't select a more distant point because of array
             # ordering.
-            if not isclose(dz_min, abs(dz_nearest)):
+            if not np.isclose(dz_min, abs(dz_nearest)):
                 neighbours[i_site] = i_min, j_min, dzs[ij_min], edgepoint
 
         return neighbours

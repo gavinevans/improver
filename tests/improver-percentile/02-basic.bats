@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,19 +31,19 @@
 
 . $IMPROVER_DIR/tests/lib/utils
 
-@test "percentile input output--percentiles 25 50 75" {
-  TEST_DIR=$(mktemp -d)
+@test "percentile input output --coordinates realization --percentiles 25 50 75" {
   improver_check_skip_acceptance
+  KGO="percentile/basic/kgo.nc"
 
   # Run percentile processing and check it passes.
   run improver percentile \
       "$IMPROVER_ACC_TEST_DIR/percentile/basic/input.nc" "$TEST_DIR/output.nc" \
-      realization --percentiles 25 50 75
+      --coordinates realization --percentiles 25.0 50 75.0
   [[ "$status" -eq 0 ]]
+
+  improver_check_recreate_kgo "output.nc" $KGO
 
   # Run nccmp to compare the output and kgo.
   improver_compare_output "$TEST_DIR/output.nc" \
-      "$IMPROVER_ACC_TEST_DIR/percentile/basic/kgo.nc"
-  rm "$TEST_DIR/output.nc"
-  rmdir "$TEST_DIR"
+      "$IMPROVER_ACC_TEST_DIR/$KGO"
 }

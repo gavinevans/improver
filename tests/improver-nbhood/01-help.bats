@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,33 +33,118 @@
   run improver nbhood -h
   [[ "$status" -eq 0 ]]
   read -d '' expected <<'__HELP__' || true
-usage: improver-nbhood [-h]
-                       [--radius-in-km RADIUS | --radii-in-km-by-lead-time \
-RADIUS_BY_LEAD_TIME RADIUS_BY_LEAD_TIME]
-                       INPUT_FILE OUTPUT_FILE
+usage: improver-nbhood [-h] [--profile] [--profile_file PROFILE_FILE]
+                       [--radius RADIUS | --radii-by-lead-time RADII_BY_LEAD_TIME LEAD_TIME_IN_HOURS]
+                       [--degrees_as_complex] [--weighted_mode]
+                       [--sum_or_fraction {sum,fraction}] [--re_mask]
+                       [--percentiles PERCENTILES [PERCENTILES ...]]
+                       [--input_mask_filepath INPUT_MASK_FILE]
+                       [--apply-recursive-filter]
+                       [--input_filepath_alphas_x_cube ALPHAS_X_FILE]
+                       [--input_filepath_alphas_y_cube ALPHAS_Y_FILE]
+                       [--alpha_x ALPHA_X] [--alpha_y ALPHA_Y]
+                       [--iterations ITERATIONS]
+                       NEIGHBOURHOOD_OUTPUT NEIGHBOURHOOD_SHAPE INPUT_FILE
+                       OUTPUT_FILE
 
-Apply basic weighted circle smoothing via the BasicNeighbourhoodProcessing
-plugin to a file with one cube.
+Apply the requested neighbourhood method via the NeighbourhoodProcessing
+plugin to a file whose data can be loaded as a single iris.cube.Cube.
 
 positional arguments:
-  INPUT_FILE            A path to an input NetCDF file to be processed
-  OUTPUT_FILE           The output path for the processed NetCDF
+  NEIGHBOURHOOD_OUTPUT  The form of the results generated using neighbourhood
+                        processing. If "probabilities" is selected, the mean
+                        probability within a neighbourhood is calculated. If
+                        "percentiles" is selected, then the percentiles are
+                        calculated within a neighbourhood. Calculating
+                        percentiles from a neighbourhood is only supported for
+                        a circular neighbourhood. Options: "probabilities",
+                        "percentiles".
+  NEIGHBOURHOOD_SHAPE   The shape of the neighbourhood to apply in
+                        neighbourhood processing. Only a "circular"
+                        neighbourhood shape is applicable for calculating
+                        "percentiles" output. Options: "circular", "square".
+  INPUT_FILE            A path to an input NetCDF file to be processed.
+  OUTPUT_FILE           The output path for the processed NetCDF.
 
 optional arguments:
   -h, --help            show this help message and exit
-  --radius-in-km RADIUS
-                        The kernel radius for neighbourhood processing
-  --radii-in-km-by-lead-time RADIUS_BY_LEAD_TIME RADIUS_BY_LEAD_TIME
-                        The kernel radii for neighbourhood processing and the
+  --profile             Switch on profiling information.
+  --profile_file PROFILE_FILE
+                        Dump profiling info to a file. Implies --profile.
+  --radius RADIUS       The radius (in m) for neighbourhood processing.
+  --radii-by-lead-time RADII_BY_LEAD_TIME LEAD_TIME_IN_HOURS
+                        The radii for neighbourhood processing and the
                         associated lead times at which the radii are valid.
-                        The radii are in km whilst the lead time has units of
-                        hours. The radii and lead times are expected as
+                        The radii are in metres whilst the lead time has units
+                        of hours. The radii and lead times are expected as
                         individual comma-separated lists with the list of
                         radii given first followed by a list of lead times to
                         indicate at what lead time each radii should be used.
-                        For example: 10,12,14 1,2,3 where a lead time of 1
-                        hour uses a radius of 10km, a lead time of 2 hours
-                        uses a radius of 12km, etc.
+                        For example: 10000,12000,14000 1,2,3 where a lead time
+                        of 1 hour uses a radius of 10000m, a lead time of 2
+                        hours uses a radius of 12000m, etc.
+  --degrees_as_complex  Set this flag to process angles, eg wind directions,
+                        as complex numbers. Not compatible with circular
+                        kernel, percentiles or recursive filter.
+  --weighted_mode       For neighbourhood processing using a circular kernel,
+                        setting the weighted_mode indicates the weighting
+                        decreases with radius. If weighted_mode is not set, a
+                        constant weighting is assumed. weighted_mode is only
+                        applicable for calculating "probability" neighbourhood
+                        output.
+  --sum_or_fraction {sum,fraction}
+                        The neighbourhood output can either be in the form of
+                        a sum of the neighbourhood, or a fraction calculated
+                        by dividing the sum of the neighbourhood by the
+                        neighbourhood area. "fraction" is the default option.
+  --re_mask             If re_mask is set (i.e. True), the original un-
+                        neighbourhood processed mask is applied to mask out
+                        the neighbourhood processed dataset. If not set,
+                        re_mask defaults to False and the original un-
+                        neighbourhood processed mask is not applied.
+                        Therefore, the neighbourhood processing may result in
+                        values being present in areas that were originally
+                        masked.
+  --percentiles PERCENTILES [PERCENTILES ...]
+                        Calculate values at the specified percentiles from the
+                        neighbourhood surrounding each grid point.
+  --input_mask_filepath INPUT_MASK_FILE
+                        A path to an input mask NetCDF file to be used to mask
+                        the input file. This is currently only supported for
+                        square neighbourhoods.
+  --apply-recursive-filter
+                        Option to apply the recursive filter to a square
+                        neighbourhooded output dataset, converting it into a
+                        Gaussian-like kernel or smoothing over short
+                        distances. The filter uses an alpha parameter (0 <
+                        alpha < 1) to control what proportion of the
+                        probability is passed onto the next grid-square in the
+                        x and y directions. The alpha parameter can be set on
+                        a grid-square by grid-square basis for the x and y
+                        directions separately (using two arrays of alpha
+                        parameters of the same dimensionality as the domain).
+                        Alternatively a single alpha value can be set for each
+                        of the x and y directions. These methods can be mixed,
+                        e.g. an array for the x direction and a float for the
+                        y direction and vice versa. The recursive filter
+                        cannot be applied to a circular kernel
+  --input_filepath_alphas_x_cube ALPHAS_X_FILE
+                        A path to a NetCDF file describing the alpha factors
+                        to be used for smoothing in the x direction when
+                        applying the recursive filter
+  --input_filepath_alphas_y_cube ALPHAS_Y_FILE
+                        A path to a NetCDF file describing the alpha factors
+                        to be used for smoothing in the y direction when
+                        applying the recursive filter
+  --alpha_x ALPHA_X     A single alpha factor (0 < alpha_x < 1) to be applied
+                        to every grid square in the x direction when applying
+                        the recursive filter
+  --alpha_y ALPHA_Y     A single alpha factor (0 < alpha_y < 1) to be applied
+                        to every grid square in the y direction when applying
+                        the recursive filter.
+  --iterations ITERATIONS
+                        Number of times to apply the filter, default=1
+                        (typically < 5)
 __HELP__
   [[ "$output" == "$expected" ]]
 }

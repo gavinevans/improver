@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,9 +33,8 @@
 
 import iris
 from iris.exceptions import CoordinateNotFoundError
-from iris import FUTURE
 
-FUTURE.netcdf_promote = True
+from improver.constants import DEFAULT_PERCENTILES
 
 
 class PercentileConverter(object):
@@ -46,35 +45,34 @@ class PercentileConverter(object):
 
     """
 
-    # Default percentile boundaries to calculate at.
-    DEFAULT_PERCENTILES = [0, 5, 10, 20, 25, 30, 40, 50,
-                           60, 70, 75, 80, 90, 95, 100]
-
-    def __init__(self, collapse_coord, percentiles=None):
+    def __init__(self, collapse_coord, percentiles=None,
+                 fast_percentile_method=True):
         """
         Create a PDF plugin with a given source plugin.
 
-        Parameters
-        ----------
-        collapse_coord : str (or list of str)
-            The name of the coordinate(s) to collapse over.
+        Args:
+            collapse_coord (str or list of str):
+                The name of the coordinate(s) to collapse over.
 
-        percentiles : list (optional)
-            Percentile values at which to calculate; if not provided uses
-            DEFAULT_PERCENTILES.
+            percentiles (Iterable list of floats or None):
+                Percentile values at which to calculate; if not provided uses
+                DEFAULT_PERCENTILES. (optional)
+
+        Raises:
+            TypeError: If collapse_coord is not a string.
 
         """
         if not isinstance(collapse_coord, list):
             collapse_coord = [collapse_coord]
-        if not all([isinstance(test_coord, basestring)
+        if not all([isinstance(test_coord, str)
                     for test_coord in collapse_coord]):
-            raise ValueError('collapse_coord is {!r}, which is not a string '
-                             'as is expected.'.format(collapse_coord))
+            raise TypeError('collapse_coord is {!r}, which is not a string '
+                            'as is expected.'.format(collapse_coord))
 
         if percentiles is not None:
-            self.percentiles = [int(value) for value in percentiles]
+            self.percentiles = [float(value) for value in percentiles]
         else:
-            self.percentiles = self.DEFAULT_PERCENTILES
+            self.percentiles = [float(value) for value in DEFAULT_PERCENTILES]
 
         # Collapsing multiple coordinates results in a new percentile
         # coordinate, its name suffixed by the original coordinate names. Such
@@ -83,6 +81,7 @@ class PercentileConverter(object):
         # percentile coordinate has a consistent name regardless of the order
         # in which the user provides the original coordinate names.
         self.collapse_coord = sorted(collapse_coord)
+        self.fast_percentile_method = fast_percentile_method
 
     def __repr__(self):
         """Represent the configured plugin instance as a string."""
@@ -98,17 +97,15 @@ class PercentileConverter(object):
             * 15 percentiles - (0%, 5%, 10%, 20%, 25%, 30%, 40%, 50%, 60%,
               70%, 75%, 80%, 90%, 95%, 100%)
 
-        Parameters
-        ----------
-        cube : iris.cube.Cube instance
-            Given the collapse coordinate, convert the set of values
-            along that coordinate into a PDF and extract percentiles.
+        Args:
+            cube (iris.cube.Cube):
+                Given the collapse coordinate, convert the set of values
+                along that coordinate into a PDF and extract percentiles.
 
-        Returns
-        -------
-        cube : iris.cube.Cube instance
-            A single merged cube of all the cubes produced by each percentile
-            collapse.
+        Returns:
+            cube (iris.cube.Cube):
+                A single merged cube of all the cubes produced by each
+                percentile collapse.
 
         """
         # Store data type and enforce the same type on return.
@@ -120,9 +117,10 @@ class PercentileConverter(object):
                               for test_coord in self.collapse_coord])
 
         if n_valid_coords == n_collapse_coords:
-            result = cube.collapsed(self.collapse_coord,
-                                    iris.analysis.PERCENTILE,
-                                    percent=self.percentiles)
+            result = cube.collapsed(
+                self.collapse_coord, iris.analysis.PERCENTILE,
+                percent=self.percentiles,
+                fast_percentile_method=self.fast_percentile_method)
             result.data = result.data.astype(data_type)
             return result
 

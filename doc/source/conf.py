@@ -1,4 +1,33 @@
 # -*- coding: utf-8 -*-
+# -----------------------------------------------------------------------------
+# (C) British Crown Copyright 2017-2018 Met Office.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 #
 # IMPROVER documentation build configuration file, created by
 # sphinx-quickstart on Fri May 19 13:27:21 2017.
@@ -16,13 +45,15 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
+# pylint: skip-file
+
 import os
 import sys
 
 SOURCE_DIR = os.path.abspath(os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    '..', '..', 'lib'
-                    ))
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', '..', 'lib'
+    ))
 
 sys.path.insert(0, SOURCE_DIR)
 
@@ -42,6 +73,7 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx.ext.coverage',
     'sphinx.ext.viewcode',
+    'sphinx.ext.mathjax',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -93,7 +125,7 @@ language = None
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = []
+exclude_patterns = ['modules.rst']
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -159,15 +191,15 @@ html_theme_options = {
 # html_logo = None
 
 # The name of an image file (relative to this directory) to use as a favicon of
-# the docs.  This file should be a Windows icon file (.ico) being 16x16 or 32x32
-# pixels large.
+# the docs.  This file should be a Windows icon file (.ico) being 16x16 or
+# 32x32 pixels large.
 #
 # html_favicon = None
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+# html_static_path = ['_static']
 
 # Add any extra paths that contain custom files (such as robots.txt or
 # .htaccess) here, relative to this directory. These files are copied
@@ -252,21 +284,21 @@ htmlhelp_basename = 'Improverdoc'
 # -- Options for LaTeX output ---------------------------------------------
 
 latex_elements = {
-     # The paper size ('letterpaper' or 'a4paper').
-     #
-     # 'papersize': 'letterpaper',
+    # The paper size ('letterpaper' or 'a4paper').
+    #
+    # 'papersize': 'letterpaper',
 
-     # The font size ('10pt', '11pt' or '12pt').
-     #
-     # 'pointsize': '10pt',
+    # The font size ('10pt', '11pt' or '12pt').
+    #
+    # 'pointsize': '10pt',
 
-     # Additional stuff for the LaTeX preamble.
-     #
-     # 'preamble': '',
+    # Additional stuff for the LaTeX preamble.
+    #
+    # 'preamble': '',
 
-     # Latex figure (float) alignment
-     #
-     # 'figure_align': 'htbp',
+    # Latex figure (float) alignment
+    #
+    # 'figure_align': 'htbp',
 }
 
 # Grouping the document tree into LaTeX files. List of tuples
@@ -359,11 +391,10 @@ intersphinx_mapping = {'https://docs.python.org/': None}
 napoleon_include_init_with_doc = True
 
 
-# Allow automatic running of sphinx-apidoc:
-# Adapted from: https://github.com/rtfd/readthedocs.org/issues/1139
 def run_apidoc(_):
-    from sphinx.apidoc import main
-    import os
+    """Allow automatic running of sphinx-apidoc:
+    Adapted from: https://github.com/rtfd/readthedocs.org/issues/1139"""
+    from sphinx.ext.apidoc import main
 
     output_dir = os.path.dirname(os.path.abspath(__file__))
     exclude_dir = os.path.join(SOURCE_DIR, 'improver', 'tests')
@@ -371,4 +402,5 @@ def run_apidoc(_):
 
 
 def setup(app):
+    """setup sphinx"""
     app.connect('builder-inited', run_apidoc)

@@ -1,6 +1,6 @@
 #!/bin/bash
 #------------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 #------------------------------------------------------------------------------
 # NAME
 #    improver tests - Run IMPROVER self-tests
@@ -18,20 +18,93 @@ function echo_ok {
     echo -e "\033[1;32m[OK]\033[0m $1"
 }
 
-function improver_test_pep8 {
-    # PEP8 testing.
-    ${PEP8:-pep8} improver
-    echo_ok "pep8"
+function echo_fail {
+    echo -e "\033[1;31m[FAIL]\033[0m $1"
+}
+
+function get_python_files {
+    FILES_TO_TEST=`find $IMPROVER_DIR -type f \( -name '*.py' \
+                                              -o -name 'improver-*' \
+                                               ! -name 'improver-tests' \
+                                               ! -name '*~' \)`
+}
+
+function licence_check {
+    # Iterate through files to check whether they contain the expected
+    # licence information. If any files do not contain the expected licence
+    # information, then this test will fail.
+read -d '' expected <<'__TEXT__' || true
+# -*- coding: utf-8 -*-
+# -----------------------------------------------------------------------------
+# (C) British Crown Copyright 2017-2018 Met Office.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+__TEXT__
+
+    FILES_TO_TEST=$@
+
+    count=0
+    for FILE in $FILES_TO_TEST; do
+        # Check whether file has a size greater than zero.
+        if [[ -s $FILE ]]; then
+            file_contents=$(<$FILE)
+            if [[ "$file_contents" != *"$expected"* ]]; then
+                echo "Unexpected licence information: ${FILE#$IMPROVER_DIR}"
+                count=$((count+1))
+            fi
+        fi
+    done
+    if (( $count > 0 )); then
+        echo_fail "IMPROVER licences"
+        exit 1
+    fi
+}
+
+function improver_test_licence {
+    # utf8 and BSD 3-clause licence testing.
+    licence_check $FILES_TO_TEST
+    echo_ok "IMPROVER licences"
+}
+
+function improver_test_pycodestyle {
+    # Pycodestyle testing.
+    ${PYCODESTYLE:-pycodestyle} $FILES_TO_TEST
+    echo_ok "pycodestyle"
 }
 
 function improver_test_pylint {
     # Pylint score generation.
-    ${PYLINT:-pylint} --rcfile=../etc/pylintrc improver
+    ${PYLINT:-pylint} --rcfile=../etc/pylintrc $FILES_TO_TEST
 }
 
 function improver_test_pylintE {
     # Pylint obvious-errors-only testing.
-    ${PYLINT:-pylint} -E --rcfile=../etc/pylintrc improver
+    ${PYLINT:-pylint} -E --rcfile=../etc/pylintrc $FILES_TO_TEST
     echo_ok "pylint -E"
 }
 
@@ -45,32 +118,55 @@ function improver_test_doc {
 
 function improver_test_unit {
     # Unit tests.
-    python -m unittest discover
+    if [[ -n $DEBUG_OPT ]]; then
+        VERBOSE_OPT='-v'
+    fi
+    if type -f coverage 1>/dev/null 2>&1; then
+        coverage run -m unittest discover ${VERBOSE_OPT:-}
+        coverage xml
+        if [[ -n "${CODACY_PROJECT_TOKEN:-}" ]]; then
+            # Report coverage to Codacy if possible.
+            python-codacy-coverage -r coverage.xml
+        fi
+    else
+        python -m unittest discover ${VERBOSE_OPT:-}
+    fi
     echo_ok "Unit tests"
 }
 
 function improver_test_cli {
     # CLI testing.
     PATH="$IMPROVER_DIR/tests/bin/:$PATH"
-    if [[ -z $BATS_OPT ]] && type prove &>/dev/null; then
-        PROVE_VERBOSE_OPT=
-        if [[ -n $DEBUG_OPT ]]; then
-            PROVE_VERBOSE_OPT='-v'
-        fi
-        prove $PROVE_VERBOSE_OPT --directives -r \
-            -e "bats --tap" --ext ".bats" "$IMPROVER_DIR/tests/"
-    else
-        bats $(find "$IMPROVER_DIR/tests/" -name "*.bats")
+
+    if [[ -n ${RECREATE_BATS_KGO:-} ]]; then
+        echo -e "\nSet to recreate KGO at path $RECREATE_BATS_KGO"
+        echo -e "To unset this use: unset RECREATE_BATS_KGO \n\n"
+        read -p "Press enter to continue"
     fi
+
+    for SUBTEST in $CLISUBTEST; do
+        test_dir=$IMPROVER_DIR/tests/improver-$SUBTEST/
+        test_dir="$(echo -e "${test_dir}" | tr -d '[:space:]')"
+        if [[ -z $BATS_OPT ]] && type prove &>/dev/null; then
+            PROVE_VERBOSE_OPT=
+            if [[ -n $DEBUG_OPT ]]; then
+                PROVE_VERBOSE_OPT='-v'
+            fi
+            prove $PROVE_VERBOSE_OPT --directives -r \
+                -e "bats --tap" --ext ".bats" --timer $test_dir
+        else
+            bats $(find $test_dir -name "*.bats")
+        fi
+    done
     echo_ok "CLI tests"
 }
 
 function print_usage {
     # Output CLI usage information.
     cat <<'__USAGE__'
-improver tests [OPTIONS] [SUBTEST...] 
+improver tests [OPTIONS] [SUBTEST...]
 
-Run pep8, pylint, documentation, unit and CLI acceptance tests.
+Run pycodestyle, pylint, documentation, unit and CLI acceptance tests.
 
 Optional arguments:
     --bats          Run CLI tests using BATS instead of the default prove
@@ -79,16 +175,36 @@ Optional arguments:
 
 Arguments:
     SUBTEST         Name(s) of a subtest to run without running the rest.
-                    Valid names are: pep8, pylint, pylintE, doc, unit, cli.
-                    pep8, pylintE, doc, unit, and cli are the default tests.
+                    Valid names are: pycodestyle, pylint, pylintE, licence, doc, unit, cli.
+                    pycodestyle, pylintE, licence, doc, unit, and cli are the default tests.
+    SUBCLI          Name(s) of cli subtests to run without running the rest.
+                    Valid names are tasks which appear in /improver/tests/
+                    without the "improver-" prefix. The default is to run all
+                    cli tests in the /improver/tests/ directory.
+                    e.g. 'improver tests cli nbhood' will run neighbourhood
+                    processing cli tests only.
 __USAGE__
 }
 
 cd $IMPROVER_DIR/lib
+#cd $IMPROVER_DIR
+
+# Find cli test options and format to work with case statement
+shopt -s extglob
+opts=../tests/*
+cli_tasks=('+(')
+for i in $opts; do
+  fname=${i##*/}
+  if [[ "$fname" != "bin" ]] && [[ "$fname" != "lib" ]]; then
+    cli_tasks+="${fname##*improver-}|"
+  fi
+done
+cli_tasks+=')'
 
 BATS_OPT=
 DEBUG_OPT=
 SUBTESTS=
+SUBCLI=
 for arg in "$@"; do
     case $arg in
         --bats)
@@ -101,8 +217,11 @@ for arg in "$@"; do
         print_usage
         exit 0
         ;;
-        pep8|pylint|pylintE|unit|cli)
+        pycodestyle|pylint|pylintE|licence|doc|unit|cli)
         SUBTESTS="$SUBTESTS $arg"
+        ;;
+        $cli_tasks)
+        SUBCLI="$SUBCLI $arg"
         ;;
         *)
         print_usage
@@ -116,11 +235,25 @@ if [[ -n "$SUBTESTS" ]]; then
     TESTS="$SUBTESTS"
 else
     # Default tests.
-    TESTS="pep8 pylintE doc unit cli"
+    TESTS="pycodestyle pylintE licence doc unit cli"
 fi
 
+# If cli sub test is not specified by user, do all cli tests.
+# Otherwise set CLISUBTEST to the sub test to run.
+CLISUBTEST=$cli_tasks
+STRIPPED_TEST="$(echo -e "${TESTS}" | tr -d '[:space:]')"
+if [[ $STRIPPED_TEST == "cli" ]]; then
+    if [[ -n "$SUBCLI" ]]; then
+        CLISUBTEST="$SUBCLI"
+    fi
+fi
+
+# Build a list of python files throughout IMPROVER.
+FILES_TO_TEST=''
+get_python_files
+
 for TEST_NAME in $TESTS; do
-    "improver_test_$TEST_NAME" "$DEBUG_OPT" "$@"
+    "improver_test_$TEST_NAME" "$DEBUG_OPT" "$@" "$CLISUBTEST"
 done
 
 if [[ -z "$SUBTESTS" ]]; then

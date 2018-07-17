@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -32,8 +32,10 @@
 @test "percentile no arguments" {
   run improver percentile
   [[ "$status" -eq 2 ]]
-  expected="usage: improver-percentile [-h] [--percentiles PERCENTILES [PERCENTILES ...]]
-                           INPUT_FILE OUTPUT_FILE COLLAPSING_COORDINATES
-                           [COLLAPSING_COORDINATES ...]"
+  expected="usage: improver-percentile [-h] [--profile] [--profile_file PROFILE_FILE]
+                           [--coordinates COORDINATES_TO_COLLAPSE [COORDINATES_TO_COLLAPSE ...]]
+                           [--percentiles PERCENTILES [PERCENTILES ...] |
+                           --no-of-percentiles NUMBER_OF_PERCENTILES]
+                           INPUT_FILE OUTPUT_FILE"
   [[ "$output" =~ "$expected" ]]
 }

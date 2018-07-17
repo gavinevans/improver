@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -35,7 +35,7 @@ land masks.
 
 """
 
-from improver.spotdata.read_input import Load
+from improver.utilities.load import load_cube
 
 
 def get_ancillary_data(diagnostics, ancillary_path):
@@ -45,32 +45,30 @@ def get_ancillary_data(diagnostics, ancillary_path):
     finding or data extraction methods.
 
     Args:
-    -----
-    diagnostics : dict
-        Dictionary containing each diagnostic to be processed with associated
-        options for how they should be produced, e.g. method of neighbour
-        selection, method of data extraction etc.
+        diagnostics (dict):
+            Dictionary containing each diagnostic to be processed with
+            associated options for how they should be produced, e.g. method of
+            neighbour selection, method of data extraction etc.
 
-    ancillary_path : string
-        String giving the path of ancillary files to be used.
+        ancillary_path (string):
+            String giving the path of ancillary files to be used.
 
     Returns:
-    --------
-    ancillary_data : dict
-        Dictionary containing named ancillary data; the key gives the name and
-        the item is the iris.cube.Cube of data.
+        ancillary_data (dict):
+            Dictionary containing named ancillary data; the key gives the name
+            and the item is the iris.cube.Cube of data.
 
     Raises:
-    -------
-    IOError if required input files are not found.
+        IOError if required input files are not found.
 
     """
     ancillary_data = {}
 
     try:
-        orography = Load('single_file').process(
-            ancillary_path + '/orography.nc', 'surface_altitude')
-    except:
+        orography = load_cube(
+            ancillary_path + '/highres_orog.nc',
+            constraints='surface_altitude')
+    except IOError:
         raise IOError('Orography file not found.')
 
     ancillary_data['orography'] = orography
@@ -79,9 +77,10 @@ def get_ancillary_data(diagnostics, ancillary_path):
     if any([(diagnostics[key]['neighbour_finding']['land_constraint'])
             for key in diagnostics.keys()]):
         try:
-            land = Load('single_file').process(
-                ancillary_path + '/land_mask.nc', 'land_binary_mask')
-        except:
+            land = load_cube(
+                ancillary_path + '/land_mask.nc',
+                constraints='land_binary_mask')
+        except IOError:
             raise IOError('Land mask file not found.')
 
         ancillary_data['land_mask'] = land

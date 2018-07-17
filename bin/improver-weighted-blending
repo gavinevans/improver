@@ -1,0 +1,205 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# -----------------------------------------------------------------------------
+# (C) British Crown Copyright 2017-2018 Met Office.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+"""Script to run weighted blending."""
+
+import iris
+import numpy as np
+from cf_units import Unit
+
+from improver.blending.weights import (
+    ChooseDefaultWeightsLinear, ChooseDefaultWeightsNonLinear)
+from improver.blending.weighted_blend import WeightedBlendAcrossWholeDimension
+from improver.utilities.cube_manipulation import merge_cubes
+from improver.argparser import ArgParser
+from improver.utilities.load import load_cube
+from improver.utilities.save import save_netcdf
+
+
+def main():
+    """Load in arguments and ensure they are set correctly.
+       Then load in the data to blend and calculate default weights
+       using the method chosen before carrying out the blending."""
+    parser = ArgParser(
+        description='Calculate the default weights to apply in weighted '
+        'blending plugins using the ChooseDefaultWeightsLinear or '
+        'ChooseDefaultWeightsNonLinear plugins. Then apply these '
+        'weights to the dataset using the BasicWeightedAverage plugin.'
+        ' Required for ChooseDefaultWeightsLinear: y0val and ONE '
+        'of slope, ynval. Required for '
+        'ChooseDefaultWeightsNonLinear: cval.')
+    parser.add_argument('wts_calc_method',
+                        metavar='WEIGHTS_CALCULATION_METHOD',
+                        choices=['linear', 'nonlinear'],
+                        help='Method to use to calculate weights used in '
+                             'blending. "linear": calculate linearly varying '
+                             'blending weights. "nonlinear": calculate '
+                             'blending weights that decrease exponentially '
+                             'with increasing blending coordinate.')
+    parser.add_argument('coordinate', type=str,
+                        metavar='COORDINATE_TO_AVERAGE_OVER',
+                        help='The coordinate over which the blending '
+                             'will be applied.')
+    parser.add_argument('--coord_exp_val', metavar='COORD_EXPECTED_VALUES',
+                        type=str,
+                        help='Optional string of expected coordinate points '
+                        'seperated by , e.g. "1496289600, 1496293200"')
+    parser.add_argument('--coordinate_unit', metavar='UNIT_STRING',
+                        default='hours since 1970-01-01 00:00:00',
+                        help='Units for time coordinate. Default= '
+                             'hours since 1970-01-01 00:00:00')
+    parser.add_argument('--calendar', metavar='CALENDAR',
+                        help='Calendar for time coordinate. Default=gregorian')
+    parser.add_argument('weighting_mode', metavar='WEIGHTED_BLEND_MODE',
+                        choices=['weighted_mean', 'weighted_maximum'],
+                        help='The method used in the weighted blend. '
+                             '"weighted_mean": calculate a normal weighted'
+                             ' mean across the coordinate. '
+                             '"weighted_maximum": multiplies the values in the'
+                             ' coordinate by the weights, and then takes the'
+                             ' maximum.')
+    parser.add_argument('input_filepaths', metavar='INPUT_FILES',
+                        nargs="+",
+                        help='Paths to input files to be blended.')
+    parser.add_argument('output_filepath', metavar='OUTPUT_FILE',
+                        help='The output path for the processed NetCDF.')
+
+    linear = parser.add_argument_group('linear weights options',
+                                       'Options for the linear weights '
+                                       'calculation in '
+                                       'ChooseDefaultWeightsLinear')
+    lin_opts = linear.add_mutually_exclusive_group()
+    lin_opts.add_argument('--slope', metavar='LINEAR_SLOPE', type=float,
+                          help='The slope of the line used for choosing '
+                               'default linear weights. Only one of ynval '
+                               'and slope may be set.')
+    lin_opts.add_argument('--ynval', metavar='LINEAR_END_POINT',
+                          type=float,
+                          help='The relative value of the weighting end '
+                               'point for choosing default linear weights. '
+                               'Only one of ynval and slope may be set.')
+    linear.add_argument('--y0val', metavar='LINEAR_STARTING_POINT', type=float,
+                        help='The relative value of the weighting start '
+                             'point for choosing default linear weights. '
+                             'This must be a positive float or 0. If not set, '
+                             'default values of y0val=20.0 and ynval=2.0 '
+                             'are set.')
+    nonlinear = parser.add_argument_group('nonlinear weights options',
+                                          'Options for the non-linear '
+                                          'weights calculation in '
+                                          'ChooseDefaultWeightsNonLinear')
+    nonlinear.add_argument('--cval', metavar='NON_LINEAR_FACTOR', type=float,
+                           help='Factor used to determine how skewed the '
+                                'non linear weights will be. '
+                                'A value of 1 implies equal weighting. If not '
+                                'set, a default value of cval=0.85 is set.')
+    parser.add_argument('--coord_adj', metavar='COORD_ADJUSTMENT_FUNCTION',
+                        type=str,
+                        help='Function to apply to the coordinate after the '
+                             'blending has been applied.')
+    parser.add_argument('--wts_redistrib_method',
+                        metavar='METHOD_TO_REDISTRIBUTE_WEIGHTS',
+                        default='evenly',
+                        help='The method to use when redistributing weights '
+                             'in cases where forecasts are missing. Options: '
+                             '"evenly": redistribute weights evenly between '
+                             'the forecasts that are available. '
+                             '"proportional": redistribute weights using the '
+                             'original weighting function.')
+    parser.add_argument('--cycletime', metavar='CYCLETIME', type=str,
+                        help='The forecast_reference_time to be used after '
+                             'blending has been applied in the format '
+                             'YYYYMMDDTHHMMZ.')
+    parser.add_argument('--coords_for_bounds_removal',
+                        metavar='COORDS_FOR_BOUNDS_REMOVAL', nargs="+",
+                        help='The forecast_reference_time to be used after '
+                             'blending has been applied in the format '
+                             'YYYYMMDDTHHMMZ.')
+    args = parser.parse_args()
+    # Fix default values for slope and cval. The argparser default value isn't
+    # used for this, because it would make it impossible to tell whether a
+    # a value was user inputted (which is needed for wrong_args_error calls).
+    if args.slope:
+        slope = args.slope
+    else:
+        slope = 0.0
+    if args.cval:
+        cval = args.cval
+    else:
+        cval = 0.85
+    if args.coord_adj:
+        args.coord_adj = eval(args.coord_adj)
+
+    if (args.wts_calc_method == "linear") and args.cval:
+        parser.wrong_args_error('cval', 'linear')
+    elif ((args.wts_calc_method == "nonlinear") and
+          np.any([args.y0val, args.ynval, args.slope])):
+        parser.wrong_args_error('y0val, slope, ynval', 'non-linear')
+
+    if args.coordinate == 'time':
+        coord_unit = Unit(args.coordinate_unit, args.calendar)
+    elif args.coordinate_unit != 'hours since 1970-01-01 00:00:00.':
+        coord_unit = args.coordinate_unit
+    else:
+        coord_unit = 'no_unit'
+
+    # Read in cubes and merge together if more than one found.
+    cubelist = iris.cube.CubeList([])
+    for ifile in args.input_filepaths:
+        cube_in = load_cube(ifile)
+        cubelist.append(cube_in)
+    if len(cubelist) == 1:
+        cube = cubelist[0]
+    else:
+        cube = merge_cubes(cubelist)
+
+    if args.wts_calc_method == "linear":
+        weights = ChooseDefaultWeightsLinear(
+            args.y0val, slope, args.ynval).process(
+                cube, args.coordinate, args.coord_exp_val, coord_unit,
+                args.wts_redistrib_method)
+
+    else:
+        weights = ChooseDefaultWeightsNonLinear(cval).process(
+            cube, args.coordinate, args.coord_exp_val, coord_unit,
+            args.wts_redistrib_method)
+
+    BlendingPlugin = WeightedBlendAcrossWholeDimension(
+        args.coordinate, args.weighting_mode, coord_adjust=args.coord_adj,
+        cycletime=args.cycletime,
+        coords_for_bounds_removal=args.coords_for_bounds_removal)
+    result = BlendingPlugin.process(cube, weights)
+    save_netcdf(result, args.output_filepath)
+
+
+if __name__ == "__main__":
+    main()

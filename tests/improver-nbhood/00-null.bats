@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,10 +33,19 @@
   run improver nbhood
   [[ "$status" -eq 2 ]]
   read -d '' expected <<'__TEXT__' || true
-usage: improver-nbhood [-h]
-                       [--radius-in-km RADIUS | --radii-in-km-by-lead-time \
-RADIUS_BY_LEAD_TIME RADIUS_BY_LEAD_TIME]
-                       INPUT_FILE OUTPUT_FILE
+usage: improver-nbhood [-h] [--profile] [--profile_file PROFILE_FILE]
+                       [--radius RADIUS | --radii-by-lead-time RADII_BY_LEAD_TIME LEAD_TIME_IN_HOURS]
+                       [--degrees_as_complex] [--weighted_mode]
+                       [--sum_or_fraction {sum,fraction}] [--re_mask]
+                       [--percentiles PERCENTILES [PERCENTILES ...]]
+                       [--input_mask_filepath INPUT_MASK_FILE]
+                       [--apply-recursive-filter]
+                       [--input_filepath_alphas_x_cube ALPHAS_X_FILE]
+                       [--input_filepath_alphas_y_cube ALPHAS_Y_FILE]
+                       [--alpha_x ALPHA_X] [--alpha_y ALPHA_Y]
+                       [--iterations ITERATIONS]
+                       NEIGHBOURHOOD_OUTPUT NEIGHBOURHOOD_SHAPE INPUT_FILE
+                       OUTPUT_FILE
 __TEXT__
   [[ "$output" =~ "$expected" ]]
 }

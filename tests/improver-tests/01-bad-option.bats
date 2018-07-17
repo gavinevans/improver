@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,9 +33,9 @@
   run improver tests --silly-option
   [[ "$status" -eq 2 ]]
   read -d '' expected <<'__HELP__' || true
-improver tests [OPTIONS] [SUBTEST...] 
+improver tests [OPTIONS] [SUBTEST...]
 
-Run pep8, pylint, documentation, unit and CLI acceptance tests.
+Run pycodestyle, pylint, documentation, unit and CLI acceptance tests.
 
 Optional arguments:
     --bats          Run CLI tests using BATS instead of the default prove
@@ -44,8 +44,14 @@ Optional arguments:
 
 Arguments:
     SUBTEST         Name(s) of a subtest to run without running the rest.
-                    Valid names are: pep8, pylint, pylintE, doc, unit, cli.
-                    pep8, pylintE, doc, unit, and cli are the default tests.
+                    Valid names are: pycodestyle, pylint, pylintE, licence, doc, unit, cli.
+                    pycodestyle, pylintE, licence, doc, unit, and cli are the default tests.
+    SUBCLI          Name(s) of cli subtests to run without running the rest.
+                    Valid names are tasks which appear in /improver/tests/
+                    without the "improver-" prefix. The default is to run all
+                    cli tests in the /improver/tests/ directory.
+                    e.g. 'improver tests cli nbhood' will run neighbourhood
+                    processing cli tests only.
 __HELP__
   [[ "$output" == "$expected" ]]
 }

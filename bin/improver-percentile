@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
-# (C) British Crown Copyright 2017 Met Office.
+# (C) British Crown Copyright 2017-2018 Met Office.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,40 +31,88 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Script to collapse cube coordinates and calculate percentiled data."""
 
-import argparse
+import numpy as np
 
-import iris
+from improver.argparser import ArgParser
+import warnings
 
 from improver.percentile import PercentileConverter
+from improver.ensemble_copula_coupling.ensemble_copula_coupling import \
+    GeneratePercentilesFromProbabilities
+from improver.ensemble_copula_coupling.ensemble_copula_coupling_utilities \
+    import choose_set_of_percentiles
+from improver.utilities.load import load_cube
+from improver.utilities.save import save_netcdf
 
 
 def main():
     """Load in arguments and get going."""
-    parser = argparse.ArgumentParser(
-        description="Calculate percentiled data over a cube coordinate by "
+    parser = ArgParser(
+        description="Calculate percentiled data over a given coordinate by "
         "collapsing that coordinate. Typically used to convert realization "
-        "(member) data into percentiled data, but may calculate over any "
-        "dimension coordinate.")
+        "data into percentiled data, but may calculate over any "
+        "dimension coordinate. Alternatively, calling this CLI with a dataset"
+        " containing probabilities will convert those to percentiles using "
+        "the ensemble copula coupling plugin. If no particular percentiles "
+        "are given at which to calculate values and no 'number of percentiles'"
+        " to calculate are specified, the following defaults will be used: "
+        "[0, 5, 10, 20, 25, 30, 40, 50, 60, 70, 75, 80, 90, 95, 100]")
     parser.add_argument("input_filepath", metavar="INPUT_FILE",
                         help="A path to an input NetCDF file to be processed")
     parser.add_argument("output_filepath", metavar="OUTPUT_FILE",
                         help="The output path for the processed NetCDF")
-    parser.add_argument("coordinates", metavar="COLLAPSING_COORDINATES",
+    parser.add_argument("--coordinates", metavar="COORDINATES_TO_COLLAPSE",
                         nargs="+",
                         help="Coordinate or coordinates over which to collapse"
                         " data and calculate percentiles; e.g. "
-                        "realization   or  latitude longitude")
-    parser.add_argument("--percentiles", metavar="PERCENTILES",
-                        nargs="+", default=None, type=int,
-                        help="Optional definition of percentiles at which"
-                        " to calculate data, otherwise default values are"
-                        " used, e.g. --percentiles 0 25 50 75 100")
-    
+                        "'realization' or 'latitude longitude'. This argument "
+                        "must be provided when collapsing a coordinate or "
+                        "coordinates to create percentiles, but is redundant "
+                        "when converting probabilities to percentiles and may "
+                        "be omitted.")
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--percentiles", metavar="PERCENTILES",
+                       nargs="+", default=None, type=float,
+                       help="Optional definition of percentiles at which to "
+                       "calculate data, e.g. --percentiles 0 33.3 66.6 100")
+    group.add_argument('--no-of-percentiles', default=None, type=int,
+                       metavar='NUMBER_OF_PERCENTILES',
+                       help="Optional definition of the number of percentiles "
+                       "to be generated, these distributed regularly with the "
+                       "aim of dividing into blocks of equal probability.")
+
     args = parser.parse_args()
-    cube = iris.load_cube(args.input_filepath)
-    result = PercentileConverter(args.coordinates,
-                                 percentiles=args.percentiles).process(cube)
-    iris.save(result, args.output_filepath, unlimited_dimensions=[])
+    cube = load_cube(args.input_filepath)
+    percentiles = args.percentiles
+    if args.no_of_percentiles is not None:
+        percentiles = choose_set_of_percentiles(args.no_of_percentiles,
+                                                sampling="quantile")
+    # TODO: Correct when formal cf-standards exists
+    if 'probability_of_' in cube.name():
+        if args.coordinates:
+            warnings.warn("Converting probabilities to percentiles. The "
+                          "provided COORDINATES_TO_COLLAPSE variable will "
+                          "not be used.")
+
+        result = GeneratePercentilesFromProbabilities().process(
+            cube, percentiles=percentiles)
+    else:
+        if not args.coordinates:
+            raise ValueError("To collapse a coordinate to calculate "
+                             "percentiles, a coordinate or list of "
+                             "coordinates must be provided.")
+
+        # Switch back to use the slow scipy method if the cube contains masked
+        # data which the numpy method cannot handle.
+        fast_percentile_method = True
+        if np.ma.is_masked(cube.data):
+            fast_percentile_method = False
+
+        result = PercentileConverter(
+            args.coordinates, percentiles=percentiles,
+            fast_percentile_method=fast_percentile_method).process(cube)
+
+    save_netcdf(result, args.output_filepath)
 
 
 if __name__ == "__main__":
