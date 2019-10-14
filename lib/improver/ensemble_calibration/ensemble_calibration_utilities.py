@@ -39,6 +39,8 @@ import pandas as pd
 import datetime
 from iris.time import PartialDateTime
 
+from improver.utilities.cube_manipulation import merge_cubes
+
 
 def convert_cube_data_to_2d(
         forecast, coord="realization", transpose=True):
@@ -143,7 +145,7 @@ def check_predictor_of_mean_flag(predictor_of_mean_flag):
         ValueError: If the predictor_of_mean_flag is not valid.
     """
     if predictor_of_mean_flag.lower() not in ["mean", "realizations"]:
-        msg = ("The requested value for the predictor_of_mean_flag {}"
+        msg = ("The requested value for the predictor_of_mean_flag {} "
                "is not an accepted value."
                "Accepted values are 'mean' or 'realizations'").format(
                    predictor_of_mean_flag.lower())
@@ -257,7 +259,8 @@ class SplitHistoricForecastAndTruth():
             cubes, self.historic_forecast_dict)
         truths = self._find_required_cubes_using_metadata(
             cubes, self.truth_dict)
-        return historic_forecasts.merge_cube(), truths.merge_cube()
+        # Use improver merge_cubes to equalise attributes
+        return merge_cubes(historic_forecasts), merge_cubes(truths)
 
 
 def extract_regimes(reg_df, init_date, final_date):

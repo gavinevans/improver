@@ -49,7 +49,7 @@ from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     GenerateProbabilitiesFromMeanAndVariance,
     RebadgePercentilesAsRealizations,
     ResamplePercentiles)
-from improver.utilities.cube_checker import find_percentile_coordinate
+from improver.metadata.probabilistic import find_percentile_coordinate
 from improver.utilities.load import load_cube
 from improver.utilities.save import save_netcdf
 
@@ -293,10 +293,9 @@ def process(current_forecast, coeffs, num_realizations=None,
             predictor_of_mean_flag=predictor_of_mean, reg_df=reg_df)
     else:
         ac = ApplyCoefficientsFromEnsembleCalibration(
-            current_forecast, coeffs,
             predictor_of_mean_flag=predictor_of_mean)
-
-    calibrated_predictor, calibrated_variance = ac.process()
+        calibrated_predictor, calibrated_variance = ac.process(
+            current_forecast, coeffs)
 
     # If input forecast is probabilities, convert output into probabilities.
     # If input forecast is percentiles, convert output into percentiles.
