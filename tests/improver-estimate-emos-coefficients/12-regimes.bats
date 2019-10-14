@@ -29,20 +29,22 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-@test "apply-emos-coefficients no arguments" {
-  run improver apply-emos-coefficients
-  [[ "$status" -eq 2 ]]
-  expected="usage: improver apply-emos-coefficients [-h] [--profile]
-                                        [--profile_file PROFILE_FILE]
-                                        [--num_realizations NUMBER_OF_REALIZATIONS]
-                                        [--random_ordering]
-                                        [--random_seed RANDOM_SEED]
-                                        [--ecc_bounds_warning]
-                                        [--predictor_of_mean PREDICTOR_OF_MEAN]
-                                        [--regime_filepath REGIME_FILEPATH]
-                                        FORECAST_FILEPATH
-                                        [COEFFICIENTS_FILEPATH]
-                                        OUTPUT_FILEPATH
-"
-  [[ "$output" =~ "$expected" ]]
+. $IMPROVER_DIR/tests/lib/utils
+
+@test "estimate-emos-coefficients for diagnostic with assumed gaussian distribution" {
+  improver_check_skip_acceptance
+  KGO="estimate-emos-coefficients/gaussian/kgo.nc"
+
+  # Estimate the EMOS coefficients and check that they match the kgo.
+  run improver estimate-emos-coefficients 'gaussian' '20170605T0300Z' "$PWD/output.nc" \
+      --historic_filepath "$IMPROVER_ACC_TEST_DIR/estimate-emos-coefficients/gaussian/history/*.nc" \
+      --truth_filepath "$IMPROVER_ACC_TEST_DIR/estimate-emos-coefficients/gaussian/truth/*.nc" \
+      --regime_filepath /home/h05/sallen/improver/lib/improver/utilities/Regimes_at_12Z_from_Met_Office_global_model_analysis.txt \
+  [[ "$status" -eq 0 ]]
+
+  improver_check_recreate_kgo "output.nc" $KGO
+
+  # Run nccmp to compare the output and kgo realizations and check it passes.
+  improver_compare_output_lower_precision "$PWD/output.nc" \
+      "$IMPROVER_ACC_TEST_DIR/$KGO"
 }

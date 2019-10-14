@@ -33,15 +33,19 @@ Unit tests for the utilities within the `ensemble_calibration_utilities`
 module.
 
 """
+import datetime
 import unittest
 
 import iris
 import numpy as np
+import pandas as pd
 from iris.tests import IrisTest
+from iris.time import PartialDateTime
+from pandas.util.testing import assert_frame_equal
 
 from improver.ensemble_calibration.ensemble_calibration_utilities import (
     convert_cube_data_to_2d, flatten_ignoring_masked_data,
-    check_predictor_of_mean_flag)
+    check_predictor_of_mean_flag, extract_regimes, identify_regime)
 from improver.tests.ensemble_calibration.ensemble_calibration. \
     helper_functions import set_up_temperature_cube
 
@@ -321,6 +325,23 @@ class Test_check_predictor_of_mean_flag(IrisTest):
         msg = "The requested value for the predictor_of_mean_flag"
         with self.assertRaisesRegex(ValueError, msg):
             check_predictor_of_mean_flag(predictor_of_mean_flag)
+
+
+class Test_extract_regimes(IrisTest):
+
+    def test_basic(self):
+        expected_data = [[PartialDateTime(2018, 1, 1), 1],
+                         [PartialDateTime(2018, 1, 2), 1],
+                         [PartialDateTime(2018, 1, 3), 2]]
+        expected_df = pd.DataFrame(expected_data, index=range(3), columns=["date", "regime"])
+        data = np.array([[1, 1, 2018, 1],
+                         [2, 1, 2018, 1],
+                         [3, 1, 2018, 2]])
+        input_df = pd.DataFrame(data, index=range(3), columns=["day", "month", "year", "regime"])
+        init_date = datetime.datetime(2018, 1, 1)
+        final_date = datetime.datetime(2018, 1, 3)
+        result = extract_regimes(input_df, init_date, final_date)
+        assert_frame_equal(result, expected_df)
 
 
 if __name__ == '__main__':

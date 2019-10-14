@@ -43,6 +43,7 @@
                                            [--predictor_of_mean PREDICTOR_OF_MEAN]
                                            [--max_iterations MAX_ITERATIONS]
                                            [--landsea_mask LANDSEA_MASK]
+                                           [--regime_filepath REGIME_FILEPATH]
                                            DISTRIBUTION CYCLETIME
                                            OUTPUT_FILEPATH
 "

@@ -40,6 +40,7 @@ usage: improver apply-emos-coefficients [-h] [--profile]
                                         [--random_seed RANDOM_SEED]
                                         [--ecc_bounds_warning]
                                         [--predictor_of_mean PREDICTOR_OF_MEAN]
+                                        [--regime_filepath REGIME_FILEPATH]
                                         FORECAST_FILEPATH
                                         [COEFFICIENTS_FILEPATH]
                                         OUTPUT_FILEPATH
@@ -103,6 +104,9 @@ optional arguments:
                         forecast mean. Currently the ensemble mean ("mean")
                         and the ensemble realizations ("realizations") are
                         supported as options. Default: "mean".
+  --regime_filepath REGIME_FILEPATH
+                        Path to the input csv file containing historic regime
+                        occurrences.
 __HELP__
   [[ "$output" == "$expected" ]]
 }

@@ -44,7 +44,7 @@ from scipy.stats import norm
 
 from improver.ensemble_calibration.ensemble_calibration_utilities import (
     convert_cube_data_to_2d, check_predictor_of_mean_flag,
-    flatten_ignoring_masked_data)
+    flatten_ignoring_masked_data, extract_regimes, identify_regime)
 from improver.utilities.cube_manipulation import enforce_coordinate_ordering
 from improver.utilities.temporal import (
     cycletime_to_datetime, datetime_to_cycletime, datetime_to_iris_time,
@@ -868,6 +868,114 @@ class EstimateCoefficientsForEnsembleCalibration():
         return coefficients_cube
 
 
+def estimate_coefficients_from_regimes(distribution, cycletime, desired_units,
+                                       predictor_of_mean_flag, max_iterations,
+                                       historic_forecast, truth, landsea_mask,
+                                       reg_df):
+    """
+    Stratifies the training data depending on the prevailing weather regime and
+    estimates parameters using EstimateCoefficientsForEnsembleCalibration
+    separately for each training subset. The resulting coefficients are then
+    stored in a cube with a regime coordinate.
+
+    Args:
+        distribution (str):
+            Name of distribution. Assume that the current forecast can be
+            represented using this distribution.
+        cycletime (str):
+            This denotes the cycle at which forecasts will be calibrated
+            using the calculated EMOS coefficients. The validity time in
+            the output coefficients cube will be calculated relative to this
+            cycletime. This cycletime is in the format YYYYMMDDTHHMMZ.
+        desired_units (str or cf_units.Unit):
+            The unit that you would like the calibration to be undertaken
+            in. The current forecast, historical forecast and truth will be
+            converted as required.
+        predictor_of_mean_flag (str):
+            String to specify the input to calculate the calibrated mean.
+            Currently the ensemble mean ("mean") and the ensemble
+            realizations ("realizations") are supported as the predictors.
+        max_iterations (int):
+            The maximum number of iterations allowed until the
+            minimisation has converged to a stable solution. If the
+            maximum number of iterations is reached, but the minimisation
+            has not yet converged to a stable solution, then the available
+            solution is used anyway, and a warning is raised. If the
+            predictor_of_mean is "realizations", then the number of
+            iterations may require increasing, as there will be
+            more coefficients to solve for.
+        historic_forecast (iris.cube.Cube):
+            The cube containing the historical forecasts used
+            for calibration.
+        truth (iris.cube.Cube):
+            The cube containing the truth used for calibration.
+        landsea_mask (iris.cube.Cube):
+            The optional cube containing a land-sea mask. If provided, only
+            land points are used to calculate the coefficients. Within the
+            land-sea mask cube land points should be specified as ones,
+            and sea points as zeros.
+        reg_df (pandas.DataFrame):
+            Data frame containing the archived regimes.
+
+        Returns:
+            coefficients_cube (iris.cube.Cube):
+            Cube containing the coefficients estimated using EMOS.
+            The cube contains a coefficient_index dimension coordinate,
+            a coefficient_name auxiliary coordinate and a regime auxiliary
+            coordinate.
+    """
+    # Extract the dates from the input cubes and convert to a datetime
+    historic_forecast.coord("forecast_reference_time").convert_units("seconds since 1970-01-01")
+    truth.coord("forecast_reference_time").convert_units("seconds since 1970-01-01")
+    dates = historic_forecast.coord("forecast_reference_time").points
+
+    # Identify the first and last dates in the list
+    init_date = min(dates)
+    final_date = max(dates)
+
+    # Convert dates to datetime objects
+    init_date = datetime.datetime.fromtimestamp(init_date)
+    final_date = datetime.datetime.fromtimestamp(final_date)
+
+    # Load in the historic regimes for the range of days under consideration
+    reg_list = extract_regimes(reg_df, init_date, final_date)
+
+    # List the unique regimes in the sample
+    regimes = reg_list.regime.unique()
+    regimes.sort()
+
+    # Initialise an empty cubelist in which to store the
+    # regime-dependent coefficients
+    coefficients_list = iris.cube.CubeList([])
+
+    for i in regimes:
+        reg_dates = reg_list.date[reg_list.regime == i]
+
+        # Extract Cubes subject to regime constraints
+        historic_forecast_reg = \
+            historic_forecast.extract(
+                iris.Constraint(forecast_reference_time=reg_dates))
+        truth_reg = truth.extract(iris.Constraint(
+            forecast_reference_time=reg_dates))
+
+        # Process Cube
+        coefficients = EstimateCoefficientsForEnsembleCalibration(
+            distribution, cycletime, desired_units=desired_units,
+            predictor_of_mean_flag=predictor_of_mean_flag,
+            max_iterations=max_iterations).process(
+            historic_forecast_reg, truth_reg, landsea_mask)
+
+        # Add regime coordinate to cube
+        coefficients.add_aux_coord(iris.coords.AuxCoord(
+            np.int32(i), long_name='regime'))
+        coefficients_list.append(coefficients)
+
+    # Merge coefficients across the regime coordinate
+    coefficients = coefficients_list.merge_cube()
+
+    return coefficients
+
+
 class ApplyCoefficientsFromEnsembleCalibration():
     """
     Class to apply the optimised EMOS coefficients to future dates.
@@ -875,7 +983,7 @@ class ApplyCoefficientsFromEnsembleCalibration():
     """
     def __init__(
             self, current_forecast, coefficients_cube,
-            predictor_of_mean_flag="mean"):
+            predictor_of_mean_flag="mean", check_hour_only=False):
         """
         Create an ensemble calibration plugin that, for Nonhomogeneous Gaussian
         Regression, applies coefficients created using on historical forecasts
@@ -894,6 +1002,12 @@ class ApplyCoefficientsFromEnsembleCalibration():
                 String to specify the input to calculate the calibrated mean.
                 Currently the ensemble mean ("mean") and the ensemble
                 realizations ("realizations") are supported as the predictors.
+            check_hour_only (bool):
+                Logical which is true when a coefficients cube is not
+                generated individually for each forecast and hence the forecast
+                reference time and time of the coefficients cube does not
+                necessarily match that of the forecast cube. e.g. in the case
+                of a fixed training window.
 
         Raises:
             ValueError: If the names of the current_forecast and
@@ -903,19 +1017,47 @@ class ApplyCoefficientsFromEnsembleCalibration():
         """
         self.current_forecast = current_forecast
         self.coefficients_cube = coefficients_cube
-        for coord_name in ["forecast_period", "time",
-                           "forecast_reference_time"]:
+        try:
+            if (self.current_forecast.coord("forecast_period") !=
+                    self.coefficients_cube.coord("forecast_period")):
+                msg = ("The forecast_period coordinate of the current "
+                       "forecast cube and coefficients cube differs. "
+                       "current forecast: {}, coefficients cube: {}").format(
+                               self.current_forecast.coord("forecast_period"),
+                               self.coefficients_cube.coord("forecast_period"))
+                raise ValueError(msg)
+        except CoordinateNotFoundError:
+            pass
+
+        for coord_name in ["time", "forecast_reference_time"]:
             try:
-                if (self.current_forecast.coord(coord_name) !=
-                        self.coefficients_cube.coord(coord_name)):
-                    msg = ("The {} coordinate of the current forecast cube "
-                           "and coefficients cube differs. "
-                           "current forecast: {}, "
-                           "coefficients cube: {}").format(
-                               coord_name,
-                               self.current_forecast.coord(coord_name),
-                               self.coefficients_cube.coord(coord_name))
-                    raise ValueError(msg)
+                if check_hour_only:
+                    # Check times are equal after removing the days
+                    if ((self.current_forecast.coord(coord_name).points %
+                         (3600*24)) !=
+                        (self.coefficients_cube.coord(coord_name).points %
+                         (3600*24))):
+                        msg = ("The {} coordinate of the current forecast cube"
+                               " and coefficients cube differs. "
+                               "current forecast: {}, "
+                               "coefficients cube: {}").format(
+                            coord_name,
+                            (self.current_forecast.coord(coord_name).points %
+                             (3600*24)),
+                            (self.coefficients_cube.coord(coord_name).points %
+                             (3600*24)))
+                        raise ValueError(msg)
+                else:
+                    if (self.current_forecast.coord(coord_name) !=
+                            self.coefficients_cube.coord(coord_name)):
+                        msg = ("The {} coordinate of the current forecast cube"
+                               " and coefficients cube differs. "
+                               "current forecast: {}, "
+                               "coefficients cube: {}").format(
+                                   coord_name,
+                                   self.current_forecast.coord(coord_name),
+                                   self.coefficients_cube.coord(coord_name))
+                        raise ValueError(msg)
             except CoordinateNotFoundError:
                 pass
 
@@ -1054,3 +1196,56 @@ class ApplyCoefficientsFromEnsembleCalibration():
             optimised_coeffs["delta"]**2 * forecast_vars.data)
 
         return calibrated_forecast_predictor, calibrated_forecast_var
+
+
+def apply_coefficients_from_regimes(current_forecast, coeffs,
+                                    predictor_of_mean_flag, reg_df):
+    """
+    Create an ensemble calibration plugin that, for regime-dependent
+    Nonhomogeneous Gaussian Regression, applies coefficients created
+    using historical forecasts and applies the coefficients to the
+    current forecast.
+
+    Args:
+        current_forecast (iris.cube.Cube):
+            The cube containing the current forecast.
+        coefficients_cube (iris.cube.Cube):
+            Cube containing the coefficients estimated using EMOS.
+            The cube contains a coefficient_index dimension coordinate
+            where the points of the coordinate are integer values and a
+            coefficient_name auxiliary coordinate where the points of
+            the coordinate are e.g. gamma, delta, alpha, beta. The cube
+            also contains a regime coordinate to distinguish between
+            parameters estimated for each regime.
+        predictor_of_mean_flag (str):
+            String to specify the input to calculate the calibrated mean.
+            Currently the ensemble mean ("mean") and the ensemble
+            realizations ("realizations") are supported as the predictors.
+        reg_df (pandas.DataFrame):
+            Data frame containing the archived regimes.
+
+    Returns:
+        (tuple) : tuple containing:
+            **calibrated_forecast_predictor** (iris.cube.Cube):
+                Cube containing the calibrated version of the
+                ensemble predictor, either the ensemble mean or
+                the ensemble realizations.
+            **calibrated_forecast_variance** (iris.cube.Cube):
+                Cube containing the calibrated version of the
+                ensemble variance, either the ensemble mean or
+                the ensemble realizations.
+
+    """
+    # Extract the date from the input cube and convert to a datetime object
+    date = current_forecast.coord("forecast_reference_time").points
+    date = datetime.datetime.fromtimestamp(date)
+
+    # Identify the current regime
+    regime = identify_regime(reg_df, date)
+
+    # Does coeffs.extract.. give a cubelist rather than a cube?
+    ac = ApplyCoefficientsFromEnsembleCalibration(
+        current_forecast, coeffs.extract(iris.Constraint(regime=regime)),
+        predictor_of_mean_flag, check_hour_only=True)
+
+    return ac

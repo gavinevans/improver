@@ -35,6 +35,9 @@ specific for ensemble calibration.
 """
 import iris
 import numpy as np
+import pandas as pd
+import datetime
+from iris.time import PartialDateTime
 
 
 def convert_cube_data_to_2d(
@@ -255,3 +258,84 @@ class SplitHistoricForecastAndTruth():
         truths = self._find_required_cubes_using_metadata(
             cubes, self.truth_dict)
         return historic_forecasts.merge_cube(), truths.merge_cube()
+
+
+def extract_regimes(reg_df, init_date, final_date):
+    """
+    Function that loads the atmospheric regime from the eight patterns
+    used in Decider that occurred on a given range of dates.
+
+    Args:
+        reg_df (pandas.DataFrame):
+            Data frame containing the prevailing weather regime on
+            historical dates.
+        init_date (datetime.datetime):
+            The first date for which the regime is required.
+        final_date (datetime.datetime):
+            The last date for which the regime is required.
+    Returns:
+        reg_list (pandas.DataFrame):
+            Data frame containing the dates of interest as datetime
+            objects and the coinciding weather regimes.
+    """
+    # Remove cycletimes from datetime objects
+    init_date = datetime.datetime(year=init_date.year,
+                                  month=init_date.month,
+                                  day=init_date.day,
+                                  hour=12)
+    final_date = datetime.datetime(year=final_date.year,
+                                   month=final_date.month,
+                                   day=final_date.day,
+                                   hour=12)
+
+    n_dates = reg_df.shape[0]
+    date_list = []
+    for i in range(n_dates):
+        date_list.append(datetime.datetime(
+            year=reg_df.year[i], month=reg_df.month[i],
+            day=reg_df.day[i], hour=reg_df.hour[i]))
+    date_list = np.array(date_list)
+
+    w_len = (final_date - init_date).days + 1
+
+    # Convert dates to datetime objects
+    reg_list = pd.DataFrame(0, index=range(w_len), columns=["date", "regime"])
+    for i in range(w_len):
+        date = init_date + datetime.timedelta(i)
+        reg_list.date[i] = PartialDateTime(year=date.year, month=date.month,
+                                           day=date.day)
+        reg_list.regime[i] = reg_df.T0[date_list == date]
+
+    return reg_list
+
+
+def identify_regime(reg_df, date):
+    """
+    Function that loads the atmospheric regime from the eight patterns
+    used in Decider that occurred on one given date.
+
+    Args:
+        reg_df (pandas.DataFrame):
+            Data frame containing the prevailing weather regime on
+            historical dates.
+        date (datetime.datetime):
+            The first date for which the regime is required.
+    Returns:
+        regime (pandas.DataFrame):
+            Integer specifying the regime at the date of interest.
+    """
+
+    date = datetime.datetime(year=date.year, month=date.month,
+                             day=date.day, hour=12)
+
+    n_dates = reg_df.shape[0]
+    date_list = []
+    for i in range(n_dates):
+        date_list.append(datetime.datetime(
+            year=reg_df.year[i], month=reg_df.month[i],
+            day=reg_df.day[i], hour=reg_df.hour[i]))
+    date_list = np.array(date_list)
+
+    regime = reg_df.T0[date_list == date]
+
+    return regime

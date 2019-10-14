@@ -107,7 +107,8 @@ def load_cube(filepath, constraints=None, no_lazy_load=False,
     return cube
 
 
-def load_cubelist(filepath, constraints=None, no_lazy_load=False):
+def load_cubelist(filepath, constraints=None, no_lazy_load=False,
+                  allow_none=False):
     """Load one cube from each of the filepath(s) provided using Iris into
     a cubelist.
 
@@ -125,12 +126,19 @@ def load_cubelist(filepath, constraints=None, no_lazy_load=False):
             If True, bypass cube deferred (lazy) loading and load the whole
             cube into memory. This can increase performance at the cost of
             memory. If False (default) then lazy load.
+        allow_none (bool):
+            If True, when the filepath is None, returns None.
+            If False, normal error handling applies.
+            Default is False.
 
     Returns:
         cubelist (iris.cube.CubeList):
             CubeList that has been created from the input filepath given the
             constraints provided.
     """
+    if filepath is None and allow_none:
+        return None
+
     if isinstance(filepath, list) and len(filepath) == 1:
         filepath = filepath[0]
 

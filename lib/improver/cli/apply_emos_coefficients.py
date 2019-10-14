@@ -35,12 +35,13 @@ Regression (NGR)."""
 
 import warnings
 
+import pandas as pd
 import numpy as np
 from iris.exceptions import CoordinateNotFoundError
 
 from improver.argparser import ArgParser
 from improver.ensemble_calibration.ensemble_calibration import (
-    ApplyCoefficientsFromEnsembleCalibration)
+    ApplyCoefficientsFromEnsembleCalibration, apply_coefficients_from_regimes)
 from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     EnsembleReordering,
     GeneratePercentilesFromMeanAndVariance,
@@ -130,23 +131,34 @@ def main(argv=None):
              'mean. Currently the ensemble mean ("mean") and the ensemble '
              'realizations ("realizations") are supported as options. '
              'Default: "mean".')
+    parser.add_argument(
+        '--regime_filepath', default=None,
+        help='Path to the input csv file containing historic '
+             'regime occurrences.')
 
     args = parser.parse_args(args=argv)
 
     # Load Cubes
     current_forecast = load_cube(args.forecast_filepath)
     coeffs = load_cube(args.coefficients_filepath, allow_none=True)
+
+    reg_df = None
+    if args.regime_filepath:
+        reg_df = pd.read_csv(args.regime_filepath)
+
     # Process Cube
     result = process(current_forecast, coeffs, args.num_realizations,
                      args.random_ordering, args.random_seed,
-                     args.ecc_bounds_warning, args.predictor_of_mean)
+                     args.ecc_bounds_warning, args.predictor_of_mean,
+                     reg_df)
     # Save Cube
     save_netcdf(result, args.output_filepath)
 
 
 def process(current_forecast, coeffs, num_realizations=None,
             random_ordering=False, random_seed=None,
-            ecc_bounds_warning=False, predictor_of_mean='mean'):
+            ecc_bounds_warning=False, predictor_of_mean='mean',
+            reg_df=None):
     """Applying coefficients for Ensemble Model Output Statistics.
 
     Load in arguments for applying coefficients for Ensemble Model Output
@@ -198,6 +210,9 @@ def process(current_forecast, coeffs, num_realizations=None,
             mean. Currently the ensemble mean "mean" as the ensemble
             realization "realization" are supported as options.
             Default is 'mean'
+        reg_df (pandas.DataFrame):
+            A data frame containing a series of past dates and the coinciding
+             weather regimes.
 
     Returns:
         result (iris.cube.Cube):
@@ -272,9 +287,15 @@ def process(current_forecast, coeffs, num_realizations=None,
             current_forecast.coord('realization').points)
 
     # Apply coefficients as part of Ensemble Model Output Statistics (EMOS).
-    ac = ApplyCoefficientsFromEnsembleCalibration(
-        current_forecast, coeffs,
-        predictor_of_mean_flag=predictor_of_mean)
+    if reg_df is not None:
+        ac = apply_coefficients_from_regimes(
+            current_forecast, coeffs,
+            predictor_of_mean_flag=predictor_of_mean, reg_df=reg_df)
+    else:
+        ac = ApplyCoefficientsFromEnsembleCalibration(
+            current_forecast, coeffs,
+            predictor_of_mean_flag=predictor_of_mean)
+
     calibrated_predictor, calibrated_variance = ac.process()
 
     # If input forecast is probabilities, convert output into probabilities.

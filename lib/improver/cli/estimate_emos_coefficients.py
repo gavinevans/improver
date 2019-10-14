@@ -36,16 +36,32 @@ Regression (NGR)."""
 import warnings
 
 import numpy as np
+import pandas as pd
+import iris
 
 from improver.argparser import ArgParser
 from improver.ensemble_calibration.ensemble_calibration import (
-    EstimateCoefficientsForEnsembleCalibration)
+    EstimateCoefficientsForEnsembleCalibration,
+    estimate_coefficients_from_regimes)
 from improver.ensemble_calibration.ensemble_calibration_utilities import (
     SplitHistoricForecastAndTruth)
 from improver.utilities.load import load_cube, load_cubelist
 from improver.utilities.cli_utilities import (
     load_json_or_none)
 from improver.utilities.save import save_netcdf
+from improver.utilities.cube_metadata import amend_metadata
+
+
+def correct_metadata(cubelist):
+    attributes = {"um_version": "delete"}
+    coordinates = {"forecast_period": {"units": "seconds"}, "time": {"units": "seconds since 1970-01-01 00:00:00"}}
+    new_cubelist = iris.cube.CubeList([])
+    for cube in cubelist:
+        cube = amend_metadata(cube, attributes=attributes, coordinates=coordinates)
+        cube.coord(axis="x").points = cube.coord(axis="x").points.astype(np.float32)
+        cube.coord("forecast_period").points = cube.coord("forecast_period").points.astype(np.int32)
+        new_cubelist.append(cube)
+    return new_cubelist
 
 
 def main(argv=None):
@@ -166,25 +182,48 @@ def main(argv=None):
                              "the same domain as the historic forecast and "
                              "truth data. Land points are specified by ones "
                              "and sea points are specified by zeros.")
+    parser.add_argument('--regime_filepath', default=None,
+                        help='Path to the input csv file containing historic '
+                             'regime occurrences.')
     args = parser.parse_args(args=argv)
 
     # Load Cubes
-    historic_forecast = load_cube(args.historic_filepath, allow_none=True)
-    truth = load_cube(args.truth_filepath, allow_none=True)
-    landsea_mask = load_cube(args.landsea_mask, allow_none=True)
+    # 14th Feb 2018 - UM version changes from 10.6 to 10.8
+    historic_forecast = load_cubelist(args.historic_filepath, allow_none=True)
+    if historic_forecast:
+        historic_forecast = correct_metadata(historic_forecast)
+        historic_forecast = historic_forecast.merge_cube()
 
+    truth = load_cubelist(args.truth_filepath, allow_none=True)
+    if truth:
+        truth = correct_metadata(truth)
+        truth = truth.merge_cube()
+
+    landsea_mask = load_cube(args.landsea_mask, allow_none=True)
     combined = (load_cubelist(args.combined_filepath)
                 if args.combined_filepath else None)
     historic_forecast_dict = (
         load_json_or_none(args.historic_forecast_identifier))
     truth_dict = load_json_or_none(args.truth_identifier)
 
+    reg_df = None
+    if args.regime_filepath:
+        reg_df = pd.read_csv(args.regime_filepath, sep=" ", header=None)
+        reg_df.columns = ["year", "month", "day", "hour", "T0", "T24", "T48",
+                          "T72", "T96", "T120", "T144", "End"]
+        reg_dict = {0: 0, 1: 3, 2: 4, 3: 6, 4: 2, 5: 5, 6: 1, 7: 7, 8: 2,
+                    9: 1, 10: 8, 11: 1, 12: 4, 13: 3, 14: 3, 15: 4, 16: 5,
+                    17: 5, 18: 6, 19: 1, 20: 2, 21: 4, 22: 5, 23: 2, 24: 3,
+                    25: 1, 26: 2, 27: 1, 28: 1, 29: 7, 30: 2}
+        for col_name in ["T0", "T24", "T48", "T72", "T96", "T120", "T144"]:
+            reg_df[col_name] = reg_df[col_name].map(reg_dict)
+
     # Process Cube
     coefficients = process(historic_forecast, truth, combined,
                            historic_forecast_dict, truth_dict,
                            args.distribution, args.cycletime, landsea_mask,
                            args.units, args.predictor_of_mean,
-                           args.max_iterations)
+                           args.max_iterations, reg_df)
     # Save Cube
     # Check whether a coefficients cube has been created. If the historic
     # forecasts and truths provided did not match in validity time, then
@@ -195,7 +234,7 @@ def main(argv=None):
 
 def process(historic_forecast, truth, combined, historic_forecast_dict,
             truth_dict, distribution, cycletime, landsea_mask, units=None,
-            predictor_of_mean='mean', max_iterations=1000):
+            predictor_of_mean='mean', max_iterations=1000, reg_df=None):
     """Module for estimate coefficients for Ensemble Model Output Statistics.
 
     Loads in arguments for estimating coefficients for Ensemble Model
@@ -263,13 +302,18 @@ def process(historic_forecast, truth, combined, historic_forecast_dict,
             iterations may require increasing, as there will be more
             coefficients to solve.
             Default is 1000.
+        reg_df (pandas.DataFrame):
+            A data frame containing a series of past dates and the coinciding
+             weather regimes.
 
     Returns:
         result (iris.cube.Cube or None):
             Cube containing the coefficients estimated using EMOS. The cube
             contains a coefficient_index dimension coordinate and a
-            coefficient_name auxiliary coordinate. If no historic forecasts or
-            truths are found then None is returned.
+            coefficient_name auxiliary coordinate. If the EMOS is
+            regime-dependent then the cube will also contain a regime
+            auxiliary coordinate. If no historic forecasts or truths are
+            found then None is returned.
 
     Raises:
         ValueError: If the historic forecast and truth inputs are specified,
@@ -335,11 +379,19 @@ def process(historic_forecast, truth, combined, historic_forecast_dict,
         else:
             raise
     else:
-        result = EstimateCoefficientsForEnsembleCalibration(
-            distribution, cycletime, desired_units=units,
-            predictor_of_mean_flag=predictor_of_mean,
-            max_iterations=max_iterations).process(
-                historic_forecast, truth, landsea_mask=landsea_mask)
+        if reg_df is not None:
+            result = estimate_coefficients_from_regimes(
+                distribution, cycletime, desired_units=units,
+                predictor_of_mean_flag=predictor_of_mean,
+                max_iterations=max_iterations,
+                historic_forecast=historic_forecast, truth=truth,
+                landsea_mask=landsea_mask, reg_df=reg_df)
+        else:
+            result = EstimateCoefficientsForEnsembleCalibration(
+                distribution, cycletime, desired_units=units,
+                predictor_of_mean_flag=predictor_of_mean,
+                max_iterations=max_iterations).process(
+                    historic_forecast, truth, landsea_mask=landsea_mask)
 
     return result
 

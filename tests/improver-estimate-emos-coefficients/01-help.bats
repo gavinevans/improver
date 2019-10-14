@@ -44,6 +44,7 @@ usage: improver estimate-emos-coefficients [-h] [--profile]
                                            [--predictor_of_mean PREDICTOR_OF_MEAN]
                                            [--max_iterations MAX_ITERATIONS]
                                            [--landsea_mask LANDSEA_MASK]
+                                           [--regime_filepath REGIME_FILEPATH]
                                            DISTRIBUTION CYCLETIME
                                            OUTPUT_FILEPATH
 
@@ -134,7 +135,9 @@ optional arguments:
                         domain as the historic forecast and truth data. Land
                         points are specified by ones and sea points are
                         specified by zeros.
-
+  --regime_filepath REGIME_FILEPATH
+                        Path to the input csv file containing historic regime
+                        occurrences.
 __HELP__
   [[ "$output" == "$expected" ]]
 }

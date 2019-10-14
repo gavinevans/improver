@@ -64,6 +64,7 @@ DEFAULT_UNITS = {
     "percentile": {"unit": "%"},
     "probability": {"unit": "1"},
     "realization": {"unit": "1", "dtype": np.int32},
+    "regime": {"unit": "1", "dtype": np.int32},
     # standard diagnostics and suitable substrings (alphabetised for clarity)
     "air_temperature_lapse_rate": {"unit": "K m-1"},
     "cloud": {"unit": "1"},
