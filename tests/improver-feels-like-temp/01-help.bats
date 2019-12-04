@@ -33,28 +33,34 @@
   run improver feels-like-temp -h
   [[ "$status" -eq 0 ]]
   read -d '' expected <<'__HELP__' || true
-usage: improver feels-like-temp [-h] [--profile] [--profile_file PROFILE_FILE]
-                                TEMPERATURE WIND_SPEED RELATIVE_HUMIDITY
-                                PRESSURE OUTPUT_FILE
+Usage: improver feels-like-temp [OPTIONS] temperature wind-speed relative-
+humidity pressure
 
-This calculates the feels like temperature using a combination of the wind
-chill index and Steadman's apparent temperature equation.
+Calculate the feels like temperature using a combination of the wind chill
+index and Steadman's apparent temperature equation with the following method:
 
-positional arguments:
-  TEMPERATURE           Path to a NetCDF file of air temperatures at screen
-                        level.
-  WIND_SPEED            Path to the NetCDF file of wind speed at 10m.
-  RELATIVE_HUMIDITY     Path to the NetCDF file of relative humidity at screen
-                        level.
-  PRESSURE              Path to a NetCDF file of mean sea level pressure.
-  OUTPUT_FILE           The output path for the processed NetCDF
+If temperature < 10 degrees C: The feels like temperature is equal to the wind
+chill.
 
-optional arguments:
-  -h, --help            show this help message and exit
-  --profile             Switch on profiling information.
-  --profile_file PROFILE_FILE
-                        Dump profiling info to a file. Implies --profile.
+If temperature > 20 degrees C: The feels like temperature is equal to the
+apparent temperature.
 
+If 10 <= temperature <= degrees C: A weighting (alpha) is calculated in order
+to blend between the wind chill and the apparent temperature.
+
+Arguments:
+  temperature         Cube of air temperature. (type: INPUTCUBE)
+  wind-speed          Cube of 10m wind speeds. (type: INPUTCUBE)
+  relative-humidity   Cube of relative humidities (type: INPUTCUBE)
+  pressure            Cube of air pressure. (type: INPUTCUBE)
+
+Options:
+  --output=STR        Output file name.
+
+Other actions:
+  -h, --help          Show the help
 __HELP__
+  echo "output = $output"
+  echo "expected = $expected"
   [[ "$output" == "$expected" ]]
 }

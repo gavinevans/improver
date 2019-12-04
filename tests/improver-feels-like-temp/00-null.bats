@@ -33,11 +33,7 @@
   run improver feels-like-temp
   [[ "$status" -eq 2 ]]
   read -d '' expected <<'__TEXT__' || true
-usage: improver feels-like-temp [-h] [--profile] [--profile_file PROFILE_FILE]
-                                TEMPERATURE WIND_SPEED RELATIVE_HUMIDITY
-                                PRESSURE OUTPUT_FILE
-improver feels-like-temp: error: the following arguments are required: TEMPERATURE, WIND_SPEED, RELATIVE_HUMIDITY, PRESSURE, OUTPUT_FILE
-
+Usage: improver feels-like-temp [OPTIONS] temperature wind-speed relative-humidity pressure
 __TEXT__
   [[ "$output" =~ "$expected" ]]
 }

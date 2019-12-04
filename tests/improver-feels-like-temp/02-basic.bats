@@ -41,7 +41,7 @@
       "$IMPROVER_ACC_TEST_DIR/feels_like_temp/ukvx/20181121T1200Z-PT0012H00M-wind_speed_at_10m.nc" \
       "$IMPROVER_ACC_TEST_DIR/feels_like_temp/ukvx/20181121T1200Z-PT0012H00M-relative_humidity_at_screen_level.nc" \
       "$IMPROVER_ACC_TEST_DIR/feels_like_temp/ukvx/20181121T1200Z-PT0012H00M-pressure_at_mean_sea_level.nc" \
-      "$TEST_DIR/output.nc"
+      --output "$TEST_DIR/output.nc"
   [[ "$status" -eq 0 ]]
 
   improver_check_recreate_kgo "output.nc" $KGO
