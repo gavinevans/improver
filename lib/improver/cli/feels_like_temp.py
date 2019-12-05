@@ -71,7 +71,3 @@ def process(temperature: cli.inputcube, wind_speed: cli.inputcube,
         calculate_feels_like_temperature)
     return calculate_feels_like_temperature(temperature, wind_speed,
                                             relative_humidity, pressure)
-
-
-if __name__ == "__main__":
-    main()
