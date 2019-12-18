@@ -240,6 +240,7 @@ class ContinuousRankedProbabilityScoreMinimisers:
         forecast_var_data = forecast_var_data.astype(np.float64)
         truth_data = truth_data.astype(np.float64)
         sqrt_pi = np.sqrt(np.pi).astype(np.float64)
+
         optimised_coeffs = minimize(
             minimisation_function, initial_guess,
             args=(forecast_predictor_data, truth_data,
@@ -886,25 +887,41 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             self.mask_cube(forecast_var, landsea_mask)
             self.mask_cube(truth, landsea_mask)
 
-        # Computing initial guess for EMOS coefficients
-        initial_guess = self.compute_initial_guess(
-            truth, forecast_predictor, self.predictor_of_mean_flag,
-            self.ESTIMATE_COEFFICIENTS_FROM_LINEAR_MODEL_FLAG,
-            no_of_realizations=no_of_realizations)
+        x_coord = forecast_predictor.coord(axis="x")
+        y_coord = forecast_predictor.coord(axis="y")
 
-        # Calculate coefficients if there are no nans in the initial guess.
-        if np.any(np.isnan(initial_guess)):
-            optimised_coeffs = initial_guess
-        else:
-            optimised_coeffs = (
-                self.minimiser.process(
-                    initial_guess, forecast_predictor,
-                    truth, forecast_var,
-                    self.predictor_of_mean_flag,
-                    self.distribution.lower()))
-        coefficients_cube = (
-            self.create_coefficients_cube(optimised_coeffs, historic_forecast))
-        return coefficients_cube
+        coefficients_cubelist = iris.cube.CubeList([])
+
+        for forecast_predictor_slice, forecast_var_slice, truth_slice, \
+                historic_forecast_slice in zip(
+                    forecast_predictor.slices_over([y_coord, x_coord]),
+                    forecast_var.slices_over([y_coord, x_coord]),
+                    truth.slices_over([y_coord, x_coord]),
+                    historic_forecast.slices_over([y_coord, x_coord])):
+
+            # Computing initial guess for EMOS coefficients
+            initial_guess = self.compute_initial_guess(
+                truth_slice, forecast_predictor_slice,
+                self.predictor_of_mean_flag,
+                self.ESTIMATE_COEFFICIENTS_FROM_LINEAR_MODEL_FLAG,
+                no_of_realizations=no_of_realizations)
+
+            # Calculate coefficients if there are no nans in the initial guess.
+            if np.any(np.isnan(initial_guess)):
+                optimised_coeffs = initial_guess
+            else:
+                optimised_coeffs = (
+                    self.minimiser.process(
+                        initial_guess, forecast_predictor_slice,
+                        truth_slice, forecast_var_slice,
+                        self.predictor_of_mean_flag,
+                        self.distribution.lower()))
+            coefficients_cube = (
+                self.create_coefficients_cube(
+                    optimised_coeffs, historic_forecast_slice))
+
+            coefficients_cubelist.append(coefficients_cube)
+        return coefficients_cubelist.merge_cube()
 
 
 class ApplyCoefficientsFromEnsembleCalibration(BasePlugin):
@@ -1024,7 +1041,8 @@ class ApplyCoefficientsFromEnsembleCalibration(BasePlugin):
             np.ones(forecast_predictor_flat.shape, dtype=np.float32))
         ones_and_mean = (
             np.column_stack((col_of_ones, forecast_predictor_flat)))
-        predicted_mean = np.dot(ones_and_mean, a_and_b)
+
+        predicted_mean = np.diag(np.dot(ones_and_mean, a_and_b))
 
         return predicted_mean, forecast_predictor
 
@@ -1069,7 +1087,7 @@ class ApplyCoefficientsFromEnsembleCalibration(BasePlugin):
         col_of_ones = np.ones(forecast_var_flat.shape, dtype=np.float32)
         ones_and_predictor = (
             np.column_stack((col_of_ones, forecast_predictor_flat)))
-        predicted_mean = np.dot(ones_and_predictor, a_and_b)
+        predicted_mean = np.diag(np.dot(ones_and_predictor, a_and_b))
         # Calculate mean of ensemble realizations, as only the
         # calibrated ensemble mean will be returned.
         forecast_predictor = (
@@ -1122,8 +1140,9 @@ class ApplyCoefficientsFromEnsembleCalibration(BasePlugin):
         # where c = (gamma)^2 and d = (delta)^2
         calibrated_forecast_var = forecast_var.copy(
             data=(
-                optimised_coeffs["gamma"]**2 +
-                optimised_coeffs["delta"]**2 * forecast_var.data))
+                np.reshape(optimised_coeffs["gamma"]**2, forecast_var.shape)  +
+                np.reshape(optimised_coeffs["delta"]**2, forecast_var.shape) *
+                forecast_var.data))
 
         return calibrated_forecast_predictor, calibrated_forecast_var
 
@@ -1161,11 +1180,12 @@ class ApplyCoefficientsFromEnsembleCalibration(BasePlugin):
 
         # Check coefficients_cube and forecast cube are compatible.
         time_coords_match(self.current_forecast, self.coefficients_cube)
-        self._spatial_domain_match()
+        #self._spatial_domain_match()
 
-        optimised_coeffs = (
-            dict(zip(self.coefficients_cube.coord("coefficient_name").points,
-                     self.coefficients_cube.data)))
+        optimised_coeffs = {}
+        for coeff_slice in self.coefficients_cube.slices_over("coefficient_name"):
+            optimised_coeffs[coeff_slice.coord("coefficient_name").points[0]] = coeff_slice.data.flatten()
+
         forecast_vars = self.current_forecast.collapsed(
             "realization", iris.analysis.VARIANCE)
 

@@ -921,9 +921,12 @@ class Test_process(SetupCubes, EnsembleCalibrationAssertions,
         """Ensure that the optimised_coefficients are returned as a cube,
         with the expected number of coefficients."""
         plugin = Plugin(self.distribution, self.current_cycle)
+        self.historic_temperature_forecast_cube.data[0, 0, 0] = 280.
         result = plugin.process(
             self.historic_temperature_forecast_cube,
             self.temperature_truth_cube)
+        print("result = ", result)
+        print("result = ", result.data)
         self.assertIsInstance(result, iris.cube.Cube)
         self.assertEqual(len(result.data), len(self.coeff_names))
 

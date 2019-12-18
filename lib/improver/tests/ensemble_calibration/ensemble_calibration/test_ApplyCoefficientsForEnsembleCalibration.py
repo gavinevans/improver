@@ -511,6 +511,21 @@ class Test_process(SetupCoefficientsCubes, EnsembleCalibrationAssertions):
     def setUp(self):
         """Setup cubes and sundries for testing calibration."""
         super().setUp()
+        current_cycle = "20171110T0000Z"
+        estimator = (
+            EstimateCoefficientsForEnsembleCalibration(
+                "gaussian", current_cycle, desired_units="Celsius"))
+        x_coord = self.current_temperature_forecast_cube.coord(axis="x")
+        y_coord = self.current_temperature_forecast_cube.coord(axis="y")
+
+        coefficients_cubelist = iris.cube.CubeList([])
+        for forecast_slice in self.current_temperature_forecast_cube.slices_over([y_coord, x_coord]):
+            coeffs = (
+                estimator.create_coefficients_cube(
+                    self.expected_mean_predictor_gaussian,
+                    forecast_slice))
+            coefficients_cubelist.append(coeffs)
+        self.coefficients_cube = coefficients_cubelist.merge_cube()
         self.plugin = Plugin()
 
     @ManageWarnings(
@@ -520,7 +535,7 @@ class Test_process(SetupCoefficientsCubes, EnsembleCalibrationAssertions):
         plugin variables appropriately."""
 
         _, _ = self.plugin.process(self.current_temperature_forecast_cube,
-                                   self.coeffs_from_mean)
+                                   self.coefficients_cube)
         self.assertEqual(self.current_temperature_forecast_cube,
                          self.plugin.current_forecast)
         self.assertEqual(self.coeffs_from_mean,
@@ -533,7 +548,7 @@ class Test_process(SetupCoefficientsCubes, EnsembleCalibrationAssertions):
         above but all grouped together."""
         calibrated_forecast_predictor, calibrated_forecast_var = (
             self.plugin.process(self.current_temperature_forecast_cube,
-                                self.coeffs_from_mean))
+                                self.coefficients_cube))
 
         self.assertCalibratedVariablesAlmostEqual(
             calibrated_forecast_predictor.data,
