@@ -4,6 +4,9 @@ build:
     image: latest
 python:
     version: 3.6
+    install:
+        - method: pip
+          path: clize
     system_packages: true
 formats:
     - htmlzip
