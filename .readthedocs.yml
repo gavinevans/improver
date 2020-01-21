@@ -8,6 +8,8 @@ python:
         - requirements: docs/rtd_pip_environment.txt
         - method: pip
           path: .
+          extra_requirements:
+              - docs
     system_packages: true
 formats:
     - htmlzip
