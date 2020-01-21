@@ -1,12 +1,13 @@
 conda:
-    file: doc/rtd_environment.yml
+    file: doc/rtd_conda_environment.yml
 build:
     image: latest
 python:
     version: 3.6
     install:
+        - requirements: docs/rtd_pip_environment.txt
         - method: pip
-          path: clize
+          path: .
     system_packages: true
 formats:
     - htmlzip
