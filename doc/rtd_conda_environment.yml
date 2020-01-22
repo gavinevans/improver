@@ -10,4 +10,3 @@ dependencies:
   - iris=2.1
   - cf_units
   - python-stratify
-  - clize
