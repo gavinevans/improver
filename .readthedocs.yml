@@ -12,4 +12,4 @@ python:
               - docs
     system_packages: true
 formats:
-    - htmlzip
+    - pdf
