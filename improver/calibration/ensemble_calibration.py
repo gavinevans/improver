@@ -349,7 +349,6 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
             tol=self.tolerance,
             options={"maxiter": self.max_iterations, "return_all": True},
         )
-
         return optimised_coeffs
 
     def calculate_normal_crps(
@@ -491,6 +490,29 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
         return result
 
 
+class Boosting(BasePlugin):
+
+    def __init__(self):
+
+    def process(initial_guess,
+        forecast_predictor,
+        truth,
+        forecast_var,
+        predictor,
+        distribution,):
+        from rpy2.robjects import pandas2ri
+        from rpy2.robjects.packages import importr
+        crch = importr("crch")
+        r_dataframe = pandas2ri.py2ri(df)
+        crch_model = crch.crch(obs~.|.,
+                data = r_dataframe,
+                dist = distribution,
+                link.scale = "log",
+                method = "boosting",
+                maxit = 100, mstop = "aic")
+
+
+
 class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
     """
     Class focussing on estimating the optimised coefficients for ensemble
@@ -513,6 +535,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         predictor="mean",
         tolerance=0.01,
         max_iterations=1000,
+        boosting=False
     ):
         """
         Create an ensemble calibration plugin that, for Nonhomogeneous Gaussian
@@ -574,6 +597,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self.predictor = predictor
         self.tolerance = tolerance
         self.max_iterations = max_iterations
+        self.boosting = boosting
         self.minimiser = ContinuousRankedProbabilityScoreMinimisers(
             tolerance=self.tolerance,
             max_iterations=self.max_iterations,
@@ -964,6 +988,13 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 cubelist is for a separate EMOS coefficient e.g. alpha, beta,
                 gamma, delta.
 
+        Returns:
+            iris.cube.CubeList:
+                CubeList constructed using the coefficients provided and using
+                metadata from the historic_forecasts cube. Each cube within the
+                cubelist is for a separate EMOS coefficient e.g. alpha, beta,
+                gamma, delta.
+
         """
         sm = self._get_statsmodels_availability()
         if self.each_point:
@@ -1058,8 +1089,9 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         7. Perform minimisation.
 
         Args:
-            historic_forecasts (iris.cube.Cube):
-                Historic forecasts from the training dataset.
+            historic_forecasts (iris.cube.Cube or iris.cube.CubeList):
+                Either a cube containing historic forecasts from the training
+                dataset or a cubelist containing a cube for each predictor.
             truths (iris.cube.Cube):
                 Truths from the training dataset.
             landsea_mask (iris.cube.Cube):
