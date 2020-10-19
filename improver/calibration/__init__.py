@@ -32,11 +32,12 @@
 
 from collections import OrderedDict
 
+import iris
 from improver.metadata.probabilistic import extract_diagnostic_name
 from improver.utilities.cube_manipulation import MergeCubes
 
 
-def split_forecasts_and_truth(cubes, truth_attribute):
+def split_forecasts_and_truth(cubes, truth_attribute, number_of_predictors):
     """
     A common utility for splitting the various inputs cubes required for
     calibration CLIs. These are generally the forecast cubes, historic truths,
@@ -74,11 +75,11 @@ def split_forecasts_and_truth(cubes, truth_attribute):
         except ValueError:
             cube_name = cube.name()
         grouped_cubes.setdefault(cube_name, []).append(cube)
-    if len(grouped_cubes) == 1:
+    if len(grouped_cubes) == number_of_predictors:
         # Only one group - all forecast/truth cubes
         land_sea_mask = None
-        diag_name = list(grouped_cubes.keys())[0]
-    elif len(grouped_cubes) == 2:
+        diag_names = list(grouped_cubes.keys())
+    elif len(grouped_cubes) == number_of_predictors + 1:
         # Two groups - the one with exactly one cube matching a name should
         # be the land_sea_mask, since we require more than 2 cubes in
         # the forecast/truth group
@@ -95,7 +96,7 @@ def split_forecasts_and_truth(cubes, truth_attribute):
 
     # split non-land_sea_mask cubes on forecast vs truth
     truth_key, truth_value = truth_attribute.split("=")
-    input_cubes = grouped_cubes[diag_name]
+    input_cubes = iris.cube.CubeList([c for dn in diag_names for c in grouped_cubes[dn]])
     grouped_cubes = {"truth": [], "historical forecast": []}
     for cube in input_cubes:
         if cube.attributes.get(truth_key) == truth_value:
@@ -108,6 +109,6 @@ def split_forecasts_and_truth(cubes, truth_attribute):
         raise IOError(f"Missing {missing_inputs} input.")
 
     truth = MergeCubes()(grouped_cubes["truth"])
-    forecast = MergeCubes()(grouped_cubes["historical forecast"])
+    forecast = MergeCubes()(grouped_cubes["historical forecast"], ensure_merge=False)
 
     return forecast, truth, land_sea_mask

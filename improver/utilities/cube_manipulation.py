@@ -216,6 +216,7 @@ class MergeCubes(BasePlugin):
         check_time_bounds_ranges=False,
         slice_over_realization=False,
         copy=True,
+        ensure_merge=True,
     ):
         """
         Function to merge cubes, accounting for differences in attributes,
@@ -244,6 +245,10 @@ class MergeCubes(BasePlugin):
             copy (bool):
                 If True, this will copy the cubes, thus not having any impact on
                 the original objects.
+            ensure_merge (bool):
+                If True, ensure a single cube is returned. If False, a
+                cubelist containing all cubes that could be merged is returned.
+
 
         Returns:
             iris.cube.Cube:
@@ -280,7 +285,10 @@ class MergeCubes(BasePlugin):
         self._equalise_cell_methods(cubelist)
 
         # merge resulting cubelist
-        result = cubelist.merge_cube()
+        if ensure_merge:
+            result = cubelist.merge_cube()
+        else:
+            result = cubelist.merge()
 
         # check time bounds if required
         if check_time_bounds_ranges:

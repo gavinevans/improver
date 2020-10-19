@@ -44,6 +44,8 @@ def process(
     truth_attribute,
     each_point=False,
     minimise_each_point=False,
+    boosting=False,
+    number_of_predictors=1,
     units=None,
     predictor="mean",
     tolerance: float = 0.01,
@@ -84,6 +86,10 @@ def process(
             within the input cube by minimising each grid point independently.
             If False, a single set of coefficients are calculated using all
             points.
+        boosting (bool):
+            Boosting
+        number_of_predictors (int):
+            Number of predictors for boosting
         units (str):
             The units that calibration should be undertaken in. The historical
             forecast and truth will be converted as required.
@@ -116,13 +122,19 @@ def process(
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
+    print(cubes)
+    if number_of_predictors > 1 and not boosting:
+        msg = "The number of predictors only needs to be specified with boosting."
+        raise ValueError(msg)
 
-    forecast, truth, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute)
+    forecast, truth, land_sea_mask = split_forecasts_and_truth(
+        cubes, truth_attribute, number_of_predictors)
 
     plugin = EstimateCoefficientsForEnsembleCalibration(
         distribution,
         each_point=each_point,
         minimise_each_point=minimise_each_point,
+        boosting=boosting,
         desired_units=units,
         predictor=predictor,
         tolerance=tolerance,

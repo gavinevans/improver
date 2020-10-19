@@ -492,25 +492,118 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
 
 class Boosting(BasePlugin):
 
-    def __init__(self):
+    """Class to implement boosting as in Messner et al., 2017."""
 
-    def process(initial_guess,
-        forecast_predictor,
-        truth,
-        forecast_var,
-        predictor,
-        distribution,):
-        from rpy2.robjects import pandas2ri
+    def __init__(self, distribution="gaussian", max_iterations=100):
+        self.distribution = "gaussian"
+        self.max_iterations = 100
+
+    def _standardise(self, input):
+        return (input - np.mean(input) )/ np.std(input)
+
+    def _compute_location_parameter_partial_derivatives(
+            self, truth, forecast_predictor, forecast_var):
+        return -(truth - forecast_predictor)/forecast_var^2
+
+    def _compute_scale_parameter_partial_derivatives(
+            self, truth, forecast_predictor, forecast_var):
+        return -(-1/forecast_var + (truth - forecast_predictor)^2/forecast_var^3)
+
+    def _find_correlation(self, forecast_predictor, partial_derivative):
+        return np.argmax(np.corrcoef(forecast_predictor, partial_derivative))
+
+    def _update_coefficients(
+            self, coeffs, forecast_predictor, partial_derivative, step_size=0.1):
+        return coeffs + step_size*np.max(np.corrcoef(forecast_predictor, partial_derivative))
+
+    def _negative_log_likelikhood(self, truth, forecast_predictor, forecast_var, lp_coeffs=None,
+            sp_coeffs=None):
+        if lp_coeffs:
+            forecast_predictor = lp_coeffs[0] + forecast_predictor * lp_coeffs[1:]
+        elif sp_coeffs is None:
+            forecast_var = sp_coeffs[0] + forecast_var * sp_coeffs[1:]
+        return -np.log(norm.pdf(truth - forecast_predictor)/forecast_var)/forecast_var
+
+    def _apply_boosting(self, coeffs, truth, forecast_predictor, forecast_var):
+
+        lp_pd = self._compute_location_parameter_partial_derivatives(
+            truth, forecast_predictor, forecast_var)
+        sp_pd = self._compute_location_parameter_partial_derivatives(
+            truth, forecast_predictor, forecast_var)
+
+        fp_max_corr_lp = self._find_correlation(forecast_predictor, lp_pd)
+        fp_max_corr_sp = self._find_correlation(forecast_predictor, sp_pd)
+
+        lp_coeffs = self._update_coefficients(coeffs, forecast_predictor,
+                                              fp_max_corr_lp)
+        sp_coeffs = self._update_coefficients(coeffs, forecast_predictor,
+                                              fp_max_corr_sp)
+
+        if (self._negative_log_likelikhood(truth, forecast_predictor,
+                                           forecast_var, lp_coeffs=lp_coeffs) <
+            self._negative_log_likelikhood(truth, forecast_predictor,
+                                           forecast_var, sp_coeffs=sp_coeffs)):
+            coeffs = lp_coeffs
+        else:
+            coeffs = sp_coeffs
+
+        return coeffs
+
+    def process(self,
+                truth,
+                forecast_predictor,
+                forecast_var,):
+
+        truth = self._standardise(truth.data.data)
+        forecast_predictor = self._standardise(forecast_predictor.data.data)
+        forecast_var = self._standardise(forecast_var.data.data)
+
+        optimised_coeffs = np.zeros(forecast_predictor.shape[1])
+        for _ in range(self.max_iterations):
+            optimised_coeffs = self._apply_boosting(
+                optimised_coeffs, truth, forecast_predictor, forecast_var)
+
+        return optimised_coeffs
+
+
+
+
+    def process_with_r(self,
+                truth,
+                forecast_predictor,
+                forecast_var,
+        ):
+        import pandas as pd
+        import rpy2.robjects as ro
+        from rpy2.robjects import Formula, pandas2ri
+        from rpy2.robjects.conversion import localconverter
         from rpy2.robjects.packages import importr
-        crch = importr("crch")
-        r_dataframe = pandas2ri.py2ri(df)
-        crch_model = crch.crch(obs~.|.,
-                data = r_dataframe,
-                dist = distribution,
-                link.scale = "log",
-                method = "boosting",
-                maxit = 100, mstop = "aic")
+        truth_data = self._standardise(truth.data.data)
+        forecast_predictor_data = self._standardise(forecast_predictor.data.data)
+        forecast_var_data = self._standardise(forecast_var.data.data)
 
+        data = {"truth": truth_data.flatten(),
+                "forecast_predictor": forecast_predictor_data.flatten(),
+                "forecast_var": forecast_var_data.flatten()}
+        print("data = ", data)
+        df = pd.DataFrame(data=data)
+
+        crch = importr("crch")
+        with localconverter(ro.default_converter + pandas2ri.converter):
+            r_dataframe = ro.conversion.py2rpy(df)
+        crch_model = crch.crch(
+            Formula("truth~.|."), data=r_dataframe,
+            dist=self.distribution,
+            link_scale="log",
+            method="boosting",
+            maxit=self.max_iterations, mstop="aic")
+        coefficients = crch_model.rx2("coefficients")
+        print("coefficients = ", crch_model.rx2("coefficients"))
+        coeff_dict = dict(zip(coefficients.names, np.array(coefficients)))
+        print("coeff_dict = ", coeff_dict)
+        optimised_coeffs = np.array(list(coeff_dict["location"][:2]) + coeff_dict["scale"][0] + coeff_dict["scale"][2])
+
+        return optimised_coeffs.astype(np.float32)
 
 
 class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
@@ -585,6 +678,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 predictor_of_mean is "realizations", then the number of
                 iterations may require increasing, as there will be
                 more coefficients to solve for.
+            boosting (bool):
 
         """
         self.distribution = distribution
@@ -598,11 +692,15 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self.tolerance = tolerance
         self.max_iterations = max_iterations
         self.boosting = boosting
-        self.minimiser = ContinuousRankedProbabilityScoreMinimisers(
-            tolerance=self.tolerance,
-            max_iterations=self.max_iterations,
-            each_point=self.each_point | self.minimise_each_point,
-        )
+        if boosting:
+            self.minimiser = Boosting(
+                distribution=self.distribution, max_iterations=self.max_iterations)
+        else:
+            self.minimiser = ContinuousRankedProbabilityScoreMinimisers(
+                tolerance=self.tolerance,
+                max_iterations=self.max_iterations,
+                each_point=self.each_point | self.minimise_each_point,
+            )
 
         # Setting default values for coeff_names.
         self.coeff_names = ["alpha", "beta", "gamma", "delta"]
@@ -955,6 +1053,42 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         else:
             cube.data = np.ma.masked_invalid(cube.data)
 
+    def _prepare_input_units(self, historic_forecasts, truths):
+        # Make sure inputs have the same units.
+        if self.desired_units:
+            historic_forecasts.convert_units(self.desired_units)
+            truths.convert_units(self.desired_units)
+
+        if historic_forecasts.units != truths.units:
+            msg = (
+                "The historic forecast units of {} do not match "
+                "the truths units {}. These units must match, so that "
+                "the coefficients can be estimated."
+            )
+            raise ValueError(msg)
+
+    def _prepare_inputs(self, historic_forecasts, truths):
+
+        historic_forecasts, truths = filter_non_matching_cubes(
+            historic_forecasts, truths
+        )
+        check_forecast_consistency(historic_forecasts)
+
+        number_of_realizations = None
+        if self.predictor.lower() == "mean":
+            forecast_predictor = collapsed(
+                historic_forecasts, "realization", iris.analysis.MEAN
+            )
+        elif self.predictor.lower() == "realizations":
+            forecast_predictor = historic_forecasts
+            number_of_realizations = len(forecast_predictor.coord("realization").points)
+            enforce_coordinate_ordering(forecast_predictor, "realization")
+
+        forecast_var = collapsed(
+            historic_forecasts, "realization", iris.analysis.VARIANCE
+        )
+        return forecast_predictor, forecast_var, number_of_realizations
+
     def guess_and_minimise(
         self,
         truths,
@@ -1058,7 +1192,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             self.predictor,
             self.distribution.lower(),
         )
-        print("optimised_coeffs = ", optimised_coeffs)
         coefficients_cubelist = self.create_coefficients_cubelist(
             optimised_coeffs, historic_forecasts
         )
@@ -1119,51 +1252,56 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
 
         # Ensure predictor is valid.
         check_predictor(self.predictor)
+        print("historic_forecasts = ", historic_forecasts)
+        print("truths = ", truths)
+        if self.boosting:
+            if isinstance(historic_forecasts, iris.cube.Cube):
+                historic_forecasts = iris.cube.CubeList([historic_forecasts])
 
-        historic_forecasts, truths = filter_non_matching_cubes(
-            historic_forecasts, truths
-        )
-        check_forecast_consistency(historic_forecasts)
-        # Make sure inputs have the same units.
-        if self.desired_units:
-            historic_forecasts.convert_units(self.desired_units)
-            truths.convert_units(self.desired_units)
+            for hf in historic_forecasts:
+                if hf.name() == truths.name():
+                    self._prepare_input_units(hf, truths)
 
-        if historic_forecasts.units != truths.units:
-            msg = (
-                "The historic forecast units of {} do not match "
-                "the truths units {}. These units must match, so that "
-                "the coefficients can be estimated."
+            forecast_predictors = iris.cube.CubeList()
+            forecast_vars = iris.cube.CubeList([])
+            for hf in historic_forecasts:
+                forecast_predictor, forecast_var, number_of_realizations = (
+                    self._prepare_inputs(hf, truths))
+                forecast_predictors.append(forecast_predictor)
+                forecast_vars.append(forecast_var)
+
+            # If a landsea_mask is provided mask out the sea points
+            if landsea_mask:
+                [self.mask_cube(fp, landsea_mask) for fp in forecast_predictors]
+                [self.mask_cube(fv, landsea_mask) for fv in forecast_vars]
+                [self.mask_cube(t, landsea_mask) for t in truths]
+
+            optimised_coeffs = self.minimiser(
+                truths,
+                forecast_predictors,
+                forecast_vars,
             )
-            raise ValueError(msg)
-
-        number_of_realizations = None
-        if self.predictor.lower() == "mean":
-            forecast_predictor = collapsed(
-                historic_forecasts, "realization", iris.analysis.MEAN
+            coefficients_cubelist = self.create_coefficients_cubelist(
+                optimised_coeffs, historic_forecasts
             )
-        elif self.predictor.lower() == "realizations":
-            forecast_predictor = historic_forecasts
-            number_of_realizations = len(forecast_predictor.coord("realization").points)
-            enforce_coordinate_ordering(forecast_predictor, "realization")
+        else:
+            self._prepare_inputs(historic_forecasts, truths)
+            forecast_predictor, forecast_var, number_of_realizations = (
+                self._prepare_inputs(historic_forecasts, truths))
 
-        forecast_var = collapsed(
-            historic_forecasts, "realization", iris.analysis.VARIANCE
-        )
+            # If a landsea_mask is provided mask out the sea points
+            if landsea_mask:
+                self.mask_cube(forecast_predictor, landsea_mask)
+                self.mask_cube(forecast_var, landsea_mask)
+                self.mask_cube(truths, landsea_mask)
 
-        # If a landsea_mask is provided mask out the sea points
-        if landsea_mask:
-            self.mask_cube(forecast_predictor, landsea_mask)
-            self.mask_cube(forecast_var, landsea_mask)
-            self.mask_cube(truths, landsea_mask)
-
-        coefficients_cubelist = self.guess_and_minimise(
-            truths,
-            historic_forecasts,
-            forecast_predictor,
-            forecast_var,
-            number_of_realizations,
-        )
+            coefficients_cubelist = self.guess_and_minimise(
+                truths,
+                historic_forecasts,
+                forecast_predictor,
+                forecast_var,
+                number_of_realizations,
+            )
 
         return coefficients_cubelist
 
