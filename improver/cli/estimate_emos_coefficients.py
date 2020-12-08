@@ -87,9 +87,12 @@ def process(
             If False, a single set of coefficients are calculated using all
             points.
         boosting (bool):
-            Boosting
+            If True, enable nonhomogeneous boosting following
+            Messner et al., 2017 allowing multiple predictors to be provided.
+            If False, coefficients are estimated using EMOS.
         number_of_predictors (int):
-            Number of predictors for boosting
+            Number of predictors for boosting. An error is raised if this
+            argument is specified without boosting enabled.
         units (str):
             The units that calibration should be undertaken in. The historical
             forecast and truth will be converted as required.
@@ -139,5 +142,6 @@ def process(
         predictor=predictor,
         tolerance=tolerance,
         max_iterations=max_iterations,
+        number_of_predictors=number_of_predictors
     )
     return plugin(forecast, truth, landsea_mask=land_sea_mask)

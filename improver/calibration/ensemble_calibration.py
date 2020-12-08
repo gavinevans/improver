@@ -492,116 +492,528 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
 
 class Boosting(BasePlugin):
 
-    """Class to implement boosting as in Messner et al., 2017."""
+    """Class to implement boosting as in Messner et al., 2017 and
+    Messner et al., 2016. This results from this implementation has been
+    checked as equal to the R implementation in Messner et al., 2016."""
 
-    def __init__(self, distribution="gaussian", max_iterations=100):
-        self.distribution = "gaussian"
-        self.max_iterations = 100
+    def __init__(self, distribution="norm", max_iterations=100, step_size=0.1):
+        """Initialise the class."""
+        self.distribution = distribution
+        self.max_iterations = max_iterations
+        self.step_size = step_size
+        if self.distribution != "norm":
+            msg = (
+                "Nonhomogeneous boosting is only supported for a "
+                "normal / gaussian distribution."
+            )
+            raise ValueError(msg)
 
-    def _standardise(self, input):
-        return (input - np.mean(input) )/ np.std(input)
+        if max_iterations > 100:
+            msg = "For nonhomogeneous boosting, the max_iterations allowed " "is 100."
+            raise ValueError(msg)
+
+    def _standardise_forecasts(self, forecasts):
+        """Standardise the forecasts for each predictor by subtracting by the
+        mean and dividing by the standard deviation.
+
+        Args:
+            forecasts (iris.cube.CubeList):
+                CubeList where each cube is a different predictor.
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+                Standardised forecasts, means and standard deviations of each
+                predictor.
+        """
+        standardised_forecasts = []
+        means = []
+        stds = []
+        for forecast in forecasts:
+            forecast = forecast.data.data.flatten()
+            means.append(np.mean(forecast))
+            stds.append(np.std(forecast))
+            standardised_forecasts.append((forecast - means[-1]) / stds[-1])
+        return np.stack(standardised_forecasts), means, stds
+
+    def _standardise_truth(self, truth):
+        """Standardise the truth by subtracting by the mean and dividing
+        by the standard deviation.
+
+        Args:
+            truth (iris.cube.CubeList):
+                Truth cube.
+
+        Returns
+            Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+                Standardised truth, mean and standard deviation
+        """
+        return (truth - np.mean(truth)) / np.std(truth), np.mean(truth), np.std(truth)
+
+    def _calculate_location_parameter(self, forecast_predictor, lp_coeffs):
+        """Compute the location parameter and sum over each predictor.
+
+        mu = xTbeta
+
+        Args:
+            forecast_predictor (numpy.ndarray):
+                Array with predictors as rows with each event as a column.
+            lp_coeffs (numpy.ndarray):
+                Location parameter coefficients.
+
+        Returns:
+            numpy.ndarray
+        """
+        return np.sum(np.atleast_2d(lp_coeffs).T * forecast_predictor, axis=0)
+
+    def _calculate_scale_parameter(self, forecast_var, sp_coeffs):
+        """Compute the scale parameter and sum over each predictor.
+
+        sigma = exp(zTgamma)
+
+        Args:
+            forecast_var (numpy.ndarray):
+                Array with forecast variance as rows with each event as a column.
+            sp_coeffs (numpy.ndarray):
+                Scale parameter coefficients.
+
+        Returns:
+            numpy.ndarray
+        """
+        return np.exp(np.sum(np.atleast_2d(sp_coeffs).T * forecast_var, axis=0))
 
     def _compute_location_parameter_partial_derivatives(
-            self, truth, forecast_predictor, forecast_var):
-        return -(truth - forecast_predictor)/forecast_var^2
+        self, truth, location_parameter, scale_parameter
+    ):
+        """Partial derivative of the negative log-likelihood with respect to
+        the location parameter taken from Appendix of Messner et al., 2017.
+
+        Args:
+            truth (numpy.ndarray):
+                Truth array.
+            location_parameter (numpy.ndarray):
+                Location parameter array.
+            scale_parameter (numpy.ndarray):
+                Scale parameter array.
+
+        Returns:
+            numpy.ndarray
+        """
+        return -(truth - location_parameter) / (scale_parameter * scale_parameter)
 
     def _compute_scale_parameter_partial_derivatives(
-            self, truth, forecast_predictor, forecast_var):
-        return -(-1/forecast_var + (truth - forecast_predictor)^2/forecast_var^3)
+        self, truth, location_parameter, scale_parameter
+    ):
+        """Partial derivative of the negative log-likelihood with respect to
+        the scale parameter taken from Appendix of Messner et al., 2017. The
+        partial derivative is multiplied by the scale parameter following
+        Messner et al., 2016.
 
-    def _find_correlation(self, forecast_predictor, partial_derivative):
-        return np.argmax(np.corrcoef(forecast_predictor, partial_derivative))
+        Args:
+            truth (numpy.ndarray):
+                Truth array.
+            location_parameter (numpy.ndarray):
+                Location parameter array.
+            scale_parameter (numpy.ndarray):
+                Scale parameter array.
 
-    def _update_coefficients(
-            self, coeffs, forecast_predictor, partial_derivative, step_size=0.1):
-        return coeffs + step_size*np.max(np.corrcoef(forecast_predictor, partial_derivative))
+        Returns:
+            numpy.ndarray
+        """
+        partial_derivative = -(
+            -1 / scale_parameter
+            + (truth - location_parameter) ** 2 / scale_parameter ** 3
+        )
+        return partial_derivative * scale_parameter
 
-    def _negative_log_likelikhood(self, truth, forecast_predictor, forecast_var, lp_coeffs=None,
-            sp_coeffs=None):
-        if lp_coeffs:
-            forecast_predictor = lp_coeffs[0] + forecast_predictor * lp_coeffs[1:]
-        elif sp_coeffs is None:
-            forecast_var = sp_coeffs[0] + forecast_var * sp_coeffs[1:]
-        return -np.log(norm.pdf(truth - forecast_predictor)/forecast_var)/forecast_var
+    def _find_correlation(self, forecast, partial_derivative):
+        """Mean of the multiplication of the forecast descriptor by the
+        partial derivative of the negative log-likelihood. Larger values
+        indicate greater correlation between the forecast descriptor and the
+        partial derivative.
 
-    def _apply_boosting(self, coeffs, truth, forecast_predictor, forecast_var):
+        Args:
+            forecast (numpy.ndarray):
+                Forecast descriptor.
+            partial_derivative (numpy.ndarray):
+                Partial derivative of the negative log-likelihood.
 
-        lp_pd = self._compute_location_parameter_partial_derivatives(
-            truth, forecast_predictor, forecast_var)
-        sp_pd = self._compute_location_parameter_partial_derivatives(
-            truth, forecast_predictor, forecast_var)
+        Returns:
+            Tuple[numpy.ndarray, int]:
+                Correlations and index of the maximum correlation.
+        """
+        means = np.mean(forecast * -partial_derivative, axis=1)
+        return means, np.nanargmax(np.abs(means))
 
-        fp_max_corr_lp = self._find_correlation(forecast_predictor, lp_pd)
-        fp_max_corr_sp = self._find_correlation(forecast_predictor, sp_pd)
+    def _update_coefficients(self, coeffs, corrcoef, corrcoef_index):
+        """Update the coefficient with the maximum correlation by a specified
+        fraction of the correlation.
 
-        lp_coeffs = self._update_coefficients(coeffs, forecast_predictor,
-                                              fp_max_corr_lp)
-        sp_coeffs = self._update_coefficients(coeffs, forecast_predictor,
-                                              fp_max_corr_sp)
+        Args:
+            coeffs (numpy.ndarray):
+               Coefficients array.
+            corrcoef (numpy.ndarray):
+               Correlation.
+            corrcoef_index (int):
+                Index of the maximum correlation.
 
-        if (self._negative_log_likelikhood(truth, forecast_predictor,
-                                           forecast_var, lp_coeffs=lp_coeffs) <
-            self._negative_log_likelikhood(truth, forecast_predictor,
-                                           forecast_var, sp_coeffs=sp_coeffs)):
-            coeffs = lp_coeffs
-        else:
-            coeffs = sp_coeffs
-
+        Returns:
+            numpy.ndarray
+         """
+        coeffs[corrcoef_index] = (
+            coeffs[corrcoef_index] + self.step_size * corrcoef[corrcoef_index]
+        )
         return coeffs
 
-    def process(self,
-                truth,
-                forecast_predictor,
-                forecast_var,):
+    def _negative_log_likelihood(
+        self, truth, forecast_predictor, forecast_var, lp_coeffs, sp_coeffs
+    ):
+        """Compute the negative log likelihood following Messner et al., 2017.
+        A normal distribution is assumed.
 
-        truth = self._standardise(truth.data.data)
-        forecast_predictor = self._standardise(forecast_predictor.data.data)
-        forecast_var = self._standardise(forecast_var.data.data)
+        Args:
+            truth (numpy.ndarray):
+                Truth array.
+            forecast_predictor (numpy.ndarray):
+                Forecast predictor.
+            forecast_var (numpy.ndarray):
+                Forecast variance.
+            lp_coeffs (numpy.ndarray):
+                Location parameter coefficients array.
+            sp_coeffs (numpy.ndarray):
+                Scale parameter coefficients array.
 
-        optimised_coeffs = np.zeros(forecast_predictor.shape[1])
-        for _ in range(self.max_iterations):
-            optimised_coeffs = self._apply_boosting(
-                optimised_coeffs, truth, forecast_predictor, forecast_var)
+        Returns:
+            numpy.ndarray:
+                Sum of the negative log-likelihood.
 
+        """
+        location_parameter = self._calculate_location_parameter(
+            forecast_predictor, lp_coeffs
+        )
+        scale_parameter = self._calculate_scale_parameter(forecast_var, sp_coeffs)
+
+        nll = -np.log(
+            norm.pdf((truth - location_parameter) / scale_parameter) / scale_parameter
+        )
+        nll[~np.isfinite(nll)] = np.nan
+        sum_nll = np.nansum(nll)
+        return sum_nll
+
+    def coeffs_to_json(self, optimised_coeffs_dict):
+        import json
+
+        with open("coefficients.json", "w") as fp:
+            json.dump(optimised_coeffs_dict, fp)
+
+    def _convert_coefficients(
+        self, optimised_coeffs, location_parameter, scale_parameter
+    ):
+        """Re-scale coefficients from standardised coefficients for
+        application. This re-scaling is general for both the location parameter
+        and scale parameter coefficients.
+
+        Args:
+            optimised_coeffs (numpy.ndarray):
+                Standardised coefficients.
+            location_parameter (numpy.ndarray):
+                Location parameter array.
+            scale_parameter (numpy.ndarray):
+                Scale parameter array.
+
+        Returns:
+            numpy.ndarray
+                Partially re-standardised coefficients.
+        """
+        optimised_coeffs[0] = optimised_coeffs[0] - np.sum(
+            optimised_coeffs[1:] * location_parameter / scale_parameter
+        )
+        optimised_coeffs[1:] = optimised_coeffs[1:] / scale_parameter
         return optimised_coeffs
 
+    def convert_lp_coefficients(
+        self,
+        optimised_coeffs,
+        location_parameter,
+        scale_parameter,
+        truth_location_parameter,
+        truth_scale_parameter,
+    ):
+        """Re-scale location parameter coefficients from standardised
+        coefficients for application.
 
+        Args:
+            optimised_coeffs (numpy.ndarray):
+                Standardised coefficients.
+            location_parameter (numpy.ndarray):
+                Location parameter array of the forecast.
+            scale_parameter (numpy.ndarray):
+                Scale parameter array of the forecast.
+            truth_location_parameter (numpy.ndarray):
+                Location parameter array of the truth.
+            truth_scale_parameter (numpy.ndarray):
+                Scale parameter array of the truth.
 
+        Returns:
+            numpy.ndarray
+                Re-standardised location parameter coefficients.
+        """
+        optimised_coeffs = self._convert_coefficients(
+            optimised_coeffs, location_parameter, scale_parameter
+        )
+        optimised_coeffs = optimised_coeffs * truth_scale_parameter
+        optimised_coeffs[0] = optimised_coeffs[0] + truth_location_parameter
+        return optimised_coeffs
 
-    def process_with_r(self,
-                truth,
-                forecast_predictor,
-                forecast_var,
+    def convert_sp_coefficients(
+        self,
+        optimised_coeffs,
+        location_parameter,
+        scale_parameter,
+        truth_scale_parameter,
+    ):
+        """Re-scale scale parameter coefficients from standardised
+        coefficients for application.
+
+        Args:
+            optimised_coeffs (numpy.ndarray):
+                Standardised coefficients.
+            location_parameter (numpy.ndarray):
+                Location parameter array of the forecast.
+            scale_parameter (numpy.ndarray):
+                Scale parameter array of the forecast.
+            truth_location_parameter (numpy.ndarray):
+                Location parameter array of the truth.
+            truth_scale_parameter (numpy.ndarray):
+                Scale parameter array of the truth.
+
+        Returns:
+            numpy.ndarray
+                Re-standardised scale parameter coefficients.
+        """
+        optimised_coeffs = self._convert_coefficients(
+            optimised_coeffs, location_parameter, scale_parameter
+        )
+        optimised_coeffs[0] = optimised_coeffs[0] + np.log(truth_scale_parameter)
+        return optimised_coeffs
+
+    def _apply_boosting(
+        self, lp_coeffs, sp_coeffs, truth, forecast_predictor, forecast_var
+    ):
+        """Following Messner et al., 2017's description of Nonhomogeneous
+        boosting.
+
+        1. Compute partial derivatives of the negative log-likelihood (NLL) score
+        with respect to the location and scale parameters.
+        2. Find the predictor that has the maximum correlation with the partial
+        derivative of the NLL.
+        3. Tentatively update coefficients following 2., so that only the
+        coefficient of the predictor with the maximum correction is incremented.
+        4. Compare the NLL following the update for the location and scale
+        parameter and choose to update either the location or scale parameter
+        coefficients.
+
+        Args:
+             lp_coeffs (numpy.ndarray):
+                Location parameter coefficients.
+             sp_coeffs
+                Scale parameter coefficients.
+            truth (numpy.ndarray):
+                Truth array.
+            forecast_predictor (numpy.ndarray):
+                Forecast predictor.
+            forecast_var (numpy.ndarray):
+                Forecast variance.
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray]:
+                Location parameter coefficients and scale parameter coefficients.
+        """
+        location_parameter = self._calculate_location_parameter(
+            forecast_predictor, lp_coeffs
+        )
+        scale_parameter = self._calculate_scale_parameter(forecast_var, sp_coeffs)
+
+        lp_pd = self._compute_location_parameter_partial_derivatives(
+            truth, location_parameter, scale_parameter
+        )
+        sp_pd = self._compute_scale_parameter_partial_derivatives(
+            truth, location_parameter, scale_parameter
+        )
+
+        corrcoef_lp, corrcoef_lp_index = self._find_correlation(
+            forecast_predictor, lp_pd
+        )
+        corrcoef_sp, corrcoef_sp_index = self._find_correlation(forecast_var, sp_pd)
+
+        new_lp_coeffs = self._update_coefficients(
+            lp_coeffs.copy(), corrcoef_lp, corrcoef_lp_index
+        )
+        new_sp_coeffs = self._update_coefficients(
+            sp_coeffs.copy(), corrcoef_sp, corrcoef_sp_index
+        )
+
+        if self._negative_log_likelihood(
+            truth, forecast_predictor, forecast_var, new_lp_coeffs, sp_coeffs
+        ) < self._negative_log_likelihood(
+            truth, forecast_predictor, forecast_var, lp_coeffs, new_sp_coeffs
         ):
+            lp_coeffs = new_lp_coeffs
+        else:
+            sp_coeffs = new_sp_coeffs
+
+        return lp_coeffs, sp_coeffs
+
+    def process(self, truth, forecast_predictors, forecast_vars):
+        """Produce optimised coefficients using nonhomogeneous boosting.
+
+        Args:
+            truth (iris.cube.Cube):
+                Truth cube.
+            forecast_predictors (iris.cube.CubeList):
+                Cubelist containing a separate cube for each predictor.
+             forecast_vars (iris.cube.CubeList):
+                Cubelist containing a separate cube for each predictor.
+
+        Returns:
+            numpy.ndarray:
+                Optimised location parameter coefficients and scale parameter
+                coefficients.
+
+        """
+        # import pandas as pd
+        # data = {
+        #     "truth": truth.data.flatten(),
+        #     "forecast_predictor_0": forecast_predictors[0].data.flatten(),
+        #     "forecast_predictor_1": forecast_predictors[1].data.flatten(),
+        #     "forecast_predictor_2": forecast_predictors[2].data.flatten(),
+        #     "forecast_predictor_3": forecast_predictors[3].data.flatten(),
+        #     "forecast_var_0": forecast_vars[0].data.flatten(),
+        #     "forecast_var_1": forecast_vars[1].data.flatten(),
+        #     "forecast_var_2": forecast_vars[2].data.flatten(),
+        #     "forecast_var_3": forecast_vars[3].data.flatten(),
+        # }
+        # df = pd.DataFrame(data=data)
+        # df.to_csv("/home/h06/gevans/impro/improver_ml/predictor_df.csv")
+        # Standardise the truth and forecasts.
+        # Assume the mean and standard deviation of the forecasts and truths
+        # are gaussian and therefore assume that the mean equals the
+        # location parameter and the standard deviation equals the scale
+        # parameter.
+        truth, truth_mean, truth_std = self._standardise_truth(
+            truth.data.data.flatten()
+        )
+        (
+            forecast_predictor_data,
+            forecast_predictor_mean,
+            forecast_predictor_std,
+        ) = self._standardise_forecasts(forecast_predictors)
+        forecast_var_data, forecast_var_mean, forecast_var_std = self._standardise_forecasts(
+            forecast_vars
+        )
+
+        # Pre-pend an additional array of zeroes for computing the intercept
+        # coefficient.
+        forecast_predictor_data = np.insert(
+            forecast_predictor_data,
+            int(0),
+            np.zeros(forecast_predictor_data[0].shape, dtype=np.float32),
+            axis=0,
+        )
+        forecast_var_data = np.insert(
+            forecast_var_data,
+            int(0),
+            np.ones(forecast_var_data[0].shape, dtype=np.float32),
+            axis=0,
+        )
+
+        optimised_lp_coeffs = np.zeros(forecast_predictor_data.shape[0])
+        optimised_sp_coeffs = np.zeros(forecast_var_data.shape[0])
+        optimised_coeffs_dict = {"location_parameter": {}, "scale_parameter": {}}
+        for index in range(self.max_iterations):
+            optimised_lp_coeffs, optimised_sp_coeffs = self._apply_boosting(
+                optimised_lp_coeffs,
+                optimised_sp_coeffs,
+                truth,
+                forecast_predictor_data,
+                forecast_var_data,
+            )
+            optimised_coeffs_dict["location_parameter"][
+                index
+            ] = optimised_lp_coeffs.tolist()
+            optimised_coeffs_dict["scale_parameter"][
+                index
+            ] = optimised_sp_coeffs.tolist()
+
+        self.coeffs_to_json(optimised_coeffs_dict)
+
+        # Re-standardise the coefficients for application.
+        optimised_lp_coeffs = self.convert_lp_coefficients(
+            optimised_lp_coeffs,
+            forecast_predictor_mean,
+            forecast_predictor_std,
+            truth_mean,
+            truth_std,
+        )
+        optimised_sp_coeffs = self.convert_sp_coefficients(
+            optimised_sp_coeffs, forecast_var_mean, forecast_var_std, truth_std
+        )
+
+        return optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)
+        #np.concatenate((optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)))
+
+    def process_with_r(
+        self, truth, forecast_predictor, forecast_var,
+    ):
         import pandas as pd
         import rpy2.robjects as ro
         from rpy2.robjects import Formula, pandas2ri
         from rpy2.robjects.conversion import localconverter
         from rpy2.robjects.packages import importr
-        truth_data = self._standardise(truth.data.data)
-        forecast_predictor_data = self._standardise(forecast_predictor.data.data)
-        forecast_var_data = self._standardise(forecast_var.data.data)
 
-        data = {"truth": truth_data.flatten(),
-                "forecast_predictor": forecast_predictor_data.flatten(),
-                "forecast_var": forecast_var_data.flatten()}
+        # truth_data, _, _ = self._standardise_truth(truth.data)
+        # forecast_predictor_data = self._standardise(forecast_predictor.data.data)
+        # forecast_var_data = self._standardise(forecast_var.data.data)
+
+        data = {
+            "truth": truth.data.flatten(),
+            "forecast_predictor_0": forecast_predictor[0].data.flatten(),
+            "forecast_predictor_1": forecast_predictor[1].data.flatten(),
+            "forecast_predictor_2": forecast_predictor[2].data.flatten(),
+            "forecast_predictor_3": forecast_predictor[3].data.flatten(),
+            "forecast_var_0": forecast_var[0].data.flatten(),
+            "forecast_var_1": forecast_var[1].data.flatten(),
+            "forecast_var_2": forecast_var[2].data.flatten(),
+            "forecast_var_3": forecast_var[3].data.flatten(),
+        }
+        # "forecast_predictor": np.array([fp.data.flatten() for fp in forecast_predictor]).flatten(),
+        # "forecast_var": np.array([fv.data.flatten() for fv in forecast_var]).flatten()}
         print("data = ", data)
         df = pd.DataFrame(data=data)
 
         crch = importr("crch")
         with localconverter(ro.default_converter + pandas2ri.converter):
             r_dataframe = ro.conversion.py2rpy(df)
+        df.to_csv("/home/h06/gevans/impro/improver_ml/predictor_df.csv")
         crch_model = crch.crch(
-            Formula("truth~.|."), data=r_dataframe,
+            Formula(
+                "truth~forecast_predictor_0+forecast_predictor_1+forecast_predictor_2+forecast_predictor_3|forecast_var_0+forecast_var_1+forecast_var_2+forecast_var_3"
+            ),
+            data=r_dataframe,
             dist=self.distribution,
             link_scale="log",
             method="boosting",
-            maxit=self.max_iterations, mstop="aic")
+            maxit=self.max_iterations,
+            mstop="aic",
+        )
         coefficients = crch_model.rx2("coefficients")
         print("coefficients = ", crch_model.rx2("coefficients"))
         coeff_dict = dict(zip(coefficients.names, np.array(coefficients)))
         print("coeff_dict = ", coeff_dict)
-        optimised_coeffs = np.array(list(coeff_dict["location"][:2]) + coeff_dict["scale"][0] + coeff_dict["scale"][2])
+        optimised_coeffs = np.array(
+            list(coeff_dict["location"][:2])
+            + coeff_dict["scale"][0]
+            + coeff_dict["scale"][2]
+        )
 
         return optimised_coeffs.astype(np.float32)
 
@@ -628,7 +1040,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         predictor="mean",
         tolerance=0.01,
         max_iterations=1000,
-        boosting=False
+        boosting=False,
+        number_of_predictors=None
     ):
         """
         Create an ensemble calibration plugin that, for Nonhomogeneous Gaussian
@@ -679,6 +1092,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 iterations may require increasing, as there will be
                 more coefficients to solve for.
             boosting (bool):
+                If True, enable nonhomogeneous boosting following
+                Messner et al., 2017 allowing multiple predictors to be provided.
+                If False, coefficients are estimated using EMOS.
+            number_of_predictors (Optional[int]):
+                Number of predictors for boosting. An error is raised if this
+                argument is specified without boosting enabled.
 
         """
         self.distribution = distribution
@@ -692,9 +1111,11 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self.tolerance = tolerance
         self.max_iterations = max_iterations
         self.boosting = boosting
+        self.number_of_predictors = number_of_predictors
         if boosting:
             self.minimiser = Boosting(
-                distribution=self.distribution, max_iterations=self.max_iterations)
+                distribution=self.distribution, max_iterations=self.max_iterations
+            )
         else:
             self.minimiser = ContinuousRankedProbabilityScoreMinimisers(
                 tolerance=self.tolerance,
@@ -703,7 +1124,17 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             )
 
         # Setting default values for coeff_names.
-        self.coeff_names = ["alpha", "beta", "gamma", "delta"]
+        if boosting:
+            # self.coeff_names = [f"{i}_{j}" for i in ["beta", "gamma"]
+            #                     for j in range(self.number_of_predictors+1)]
+            self.coeff_names = ["beta", "gamma"]
+        else:
+            self.coeff_names = ["alpha", "beta", "gamma", "delta"]
+
+        if boosting and predictor == "realization":
+            msg = ("Using Nonhomogeneous Gaussian Boosting with a realization "
+                   "predictor is not yet supported.")
+            raise ValueError(msg)
 
     def _validate_distribution(self):
         """Validate that the distribution supplied has a corresponding method
@@ -873,7 +1304,53 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             cubelist.append(cube)
         return cubelist
 
-    def create_coefficients_cubelist(self, optimised_coeffs, historic_forecasts):
+    def _create_cubelist_from_boosting(
+        self, optimised_coeffs, aux_coords_and_dims, attributes, predictor_names
+    ):
+        """Create a cubelist by combining the optimised coefficients and the
+        appropriate metadata. A predictor_index coordinate and predictor_names
+        coordinate are created for storing the location parameter (beta) and
+        scale parameter (gamma) coefficients.
+
+        Args:
+            optimised_coeffs (numpy.ndarray)
+            aux_coords_and_dims (list of tuples):
+                List of tuples of the format [(coord, dim), (coord, dim)]
+            attributes (dict):
+                Attributes for an EMOS coefficients cube including
+                "diagnostic standard name" and an updated title.
+            predictor_names (list):
+                Names of predictors used in Nonhomogeneous Boosting.
+
+        Returns:
+            cubelist (iris.cube.CubeList):
+                CubeList constructed using the coefficients provided and using
+                metadata from the historic_forecasts cube. Each cube within the
+                cubelist is for a separate Nonhomogeneous boosting coefficient
+                i.e. beta and gamma.
+        """
+        dim_coords_and_dims = [
+            (iris.coords.DimCoord(list(range(len(predictor_names))),
+                                  long_name="predictor_index"), 0)
+        ]
+        aux_coords_and_dims.extend(
+            [(iris.coords.AuxCoord(predictor_names, long_name="predictor_name"), 0)]
+        )
+        cubelist = iris.cube.CubeList([])
+        for optimised_coeff, coeff_name in zip(optimised_coeffs, self.coeff_names):
+            cube = iris.cube.Cube(
+                optimised_coeff,
+                long_name=f"ngb_coefficient_{coeff_name}",
+                units="1",
+                dim_coords_and_dims=dim_coords_and_dims,
+                aux_coords_and_dims=aux_coords_and_dims,
+                attributes=attributes,
+            )
+            cubelist.append(cube)
+        return cubelist
+
+    def create_coefficients_cubelist(self, optimised_coeffs, historic_forecasts,
+                                     predictor_names=None):
         """Create a cubelist for storing the coefficients computed using EMOS.
 
         .. See the documentation for examples of these cubes.
@@ -886,6 +1363,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 Order of coefficients is [alpha, beta, gamma, delta].
             historic_forecasts (iris.cube.Cube):
                 Historic forecasts from the training dataset.
+            predictor_names (list):
+                Names of predictors used in Nonhomogeneous Boosting.
 
         Returns:
             iris.cube.CubeList:
@@ -919,9 +1398,15 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         aux_coords_and_dims.extend(self._create_spatial_coordinates(historic_forecasts))
         attributes = self._set_attributes(historic_forecasts)
 
-        return self._create_cubelist(
-            optimised_coeffs, historic_forecasts, aux_coords_and_dims, attributes
-        )
+        if self.boosting:
+            print("aux_coords_and_dims = ", aux_coords_and_dims)
+            return self._create_cubelist_from_boosting(
+                optimised_coeffs, aux_coords_and_dims, attributes, predictor_names
+            )
+        else:
+            return self._create_cubelist(
+                optimised_coeffs, historic_forecasts, aux_coords_and_dims, attributes
+            )
 
     def compute_initial_guess(
         self,
@@ -930,7 +1415,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         predictor,
         estimate_coefficients_from_linear_model_flag,
         number_of_realizations,
-        sm=None
+        sm=None,
     ):
         """
         Function to compute initial guess of the alpha, beta, gamma
@@ -1067,7 +1552,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             )
             raise ValueError(msg)
 
-    def _prepare_inputs(self, historic_forecasts, truths):
+    def _prepare_inputs(
+        self,
+        historic_forecasts,
+        truths,
+        scale_parameter_predictor=iris.analysis.VARIANCE,
+    ):
 
         historic_forecasts, truths = filter_non_matching_cubes(
             historic_forecasts, truths
@@ -1085,7 +1575,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             enforce_coordinate_ordering(forecast_predictor, "realization")
 
         forecast_var = collapsed(
-            historic_forecasts, "realization", iris.analysis.VARIANCE
+            historic_forecasts, "realization", scale_parameter_predictor
         )
         return forecast_predictor, forecast_var, number_of_realizations
 
@@ -1144,7 +1634,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                     self.predictor,
                     self.ESTIMATE_COEFFICIENTS_FROM_LINEAR_MODEL_FLAG,
                     number_of_realizations,
-                    sm
+                    sm,
                 )
                 for (truths_slice, fp_slice) in zip(
                     truths.slices_over(index), forecast_predictor.slices_over(index)
@@ -1154,7 +1644,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             with Pool(os.cpu_count()) as pool:
                 initial_guess = pool.starmap(self.compute_initial_guess, argument_list)
 
-            print("initial_guess = ", initial_guess)
         else:
             if self.minimise_each_point:
                 self.ESTIMATE_COEFFICIENTS_FROM_LINEAR_MODEL_FLAG = False
@@ -1166,7 +1655,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 self.predictor,
                 self.ESTIMATE_COEFFICIENTS_FROM_LINEAR_MODEL_FLAG,
                 number_of_realizations,
-                sm=sm
+                sm=sm,
             )
             if np.any(np.isnan(initial_guess)):
                 initial_guess = self.compute_initial_guess(
@@ -1175,12 +1664,17 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                     self.predictor,
                     False,
                     number_of_realizations,
-                    sm=sm)
+                    sm=sm,
+                )
 
             if self.minimise_each_point:
                 initial_guess = np.broadcast_to(
                     initial_guess,
-                    (len(truths.coord(axis="y").points) * len(truths.coord(axis="x").points), len(initial_guess)),
+                    (
+                        len(truths.coord(axis="y").points)
+                        * len(truths.coord(axis="x").points),
+                        len(initial_guess),
+                    ),
                 )
 
         # Calculate coefficients if there are no nans in the initial guess.
@@ -1196,6 +1690,32 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             optimised_coeffs, historic_forecasts
         )
 
+        return coefficients_cubelist
+
+    def minimise_boosting(self, truths, historic_forecasts, forecast_predictors, forecast_vars):
+        if self.each_point | self.minimise_each_point:
+            index = [
+                forecast_predictors[0].coord(axis="y"),
+                forecast_predictors[0].coord(axis="x"),
+            ]
+
+            argument_list = []
+            for fp, fv in zip(forecast_predictors, forecast_vars):
+                for truth_slice, fp_slice, fv_slice in zip(truths.slices_over(index), fp.slices_over(index), fv.slices_over(index)):
+                    argument_list.append([truth_slice, fp_slice, fv_slice])
+
+            with Pool(os.cpu_count()) as pool:
+                optimised_coeffs = pool.starmap(self.minimiser.process, argument_list)
+
+        else:
+            optimised_coeffs = self.minimiser.process(
+                truths, forecast_predictors, forecast_vars,
+            )
+
+        predictor_names = ["intercept"] + [fp.name() for fp in forecast_predictors]
+        coefficients_cubelist = self.create_coefficients_cubelist(
+            optimised_coeffs, historic_forecasts[0], predictor_names=predictor_names
+        )
         return coefficients_cubelist
 
     def process(self, historic_forecasts, truths, landsea_mask=None):
@@ -1265,8 +1785,13 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             forecast_predictors = iris.cube.CubeList()
             forecast_vars = iris.cube.CubeList([])
             for hf in historic_forecasts:
-                forecast_predictor, forecast_var, number_of_realizations = (
-                    self._prepare_inputs(hf, truths))
+                (
+                    forecast_predictor,
+                    forecast_var,
+                    number_of_realizations,
+                ) = self._prepare_inputs(
+                    hf, truths, scale_parameter_predictor=iris.analysis.STD_DEV
+                )
                 forecast_predictors.append(forecast_predictor)
                 forecast_vars.append(forecast_var)
 
@@ -1276,18 +1801,24 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 [self.mask_cube(fv, landsea_mask) for fv in forecast_vars]
                 [self.mask_cube(t, landsea_mask) for t in truths]
 
-            optimised_coeffs = self.minimiser(
+            print("truths = ", truths)
+            print("forecast_predictors = ", forecast_predictors)
+            print("forecast_vars = ", forecast_vars)
+
+            coefficients_cubelist = self.minimise_boosting(
                 truths,
+                historic_forecasts,
                 forecast_predictors,
                 forecast_vars,
             )
-            coefficients_cubelist = self.create_coefficients_cubelist(
-                optimised_coeffs, historic_forecasts
-            )
+            print("coefficients_cubelist = ", coefficients_cubelist)
         else:
             self._prepare_inputs(historic_forecasts, truths)
-            forecast_predictor, forecast_var, number_of_realizations = (
-                self._prepare_inputs(historic_forecasts, truths))
+            (
+                forecast_predictor,
+                forecast_var,
+                number_of_realizations,
+            ) = self._prepare_inputs(historic_forecasts, truths)
 
             # If a landsea_mask is provided mask out the sea points
             if landsea_mask:
@@ -1312,7 +1843,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
     uncalibrated input forecast and EMOS coefficients.
     """
 
-    def __init__(self, predictor="mean"):
+    def __init__(self, predictor="mean", boosting=False):
         """
         Create a plugin that uses the coefficients created using EMOS from
         historical forecasts and corresponding truths and applies these
@@ -1326,21 +1857,26 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                 Currently the ensemble mean ("mean") and the ensemble
                 realizations ("realizations") are supported as the predictors.
 
+
         """
         check_predictor(predictor)
         self.predictor = predictor
+        self.boosting = boosting
 
         self.coefficients_cubelist = None
-        self.current_forecast = None
 
     def __repr__(self):
         """Represent the configured plugin instance as a string."""
         result = "<CalibratedForecastDistributionParameters: predictor: {}>"
         return result.format(self.predictor)
 
-    def _diagnostic_match(self):
+    def _diagnostic_match(self, current_forecast):
         """Check that the forecast diagnostic matches the coefficients used to
         construct the coefficients.
+
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
 
         Raises:
             ValueError: If the forecast diagnostic and coefficients cube
@@ -1348,18 +1884,26 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         """
         for cube in self.coefficients_cubelist:
             diag = cube.attributes["diagnostic_standard_name"]
-            if self.current_forecast.name() != diag:
+            if isinstance(current_forecast, iris.cube.CubeList):
+                current_forecast_names = [cf.name() for cf in current_forecast]
+            else:
+                current_forecast_names = [current_forecast.name()]
+            if diag not in current_forecast_names:
                 msg = (
-                    f"The forecast diagnostic ({self.current_forecast.name()}) "
-                    "does not match the diagnostic used to construct the "
+                    f"The available forecast diagnostics ({current_forecast_names}) "
+                    "do not match the diagnostic used to construct the "
                     f"coefficients ({diag})"
                 )
                 raise ValueError(msg)
 
-    def _spatial_domain_match(self):
+    def _spatial_domain_match(self, current_forecast):
         """
         Check that the domain of the current forecast and coefficients cube
         match.
+
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
 
         Raises:
             ValueError: If the points or bounds of the specified axis of the
@@ -1374,29 +1918,95 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             for coeff_cube in self.coefficients_cubelist:
                 if (
                     (
-                        self.current_forecast.coord(axis=axis).collapsed().points
+                        current_forecast.coord(axis=axis).collapsed().points
                         != coeff_cube.coord(axis=axis).collapsed().points
                     ).all()
                     or (
-                        self.current_forecast.coord(axis=axis).collapsed().bounds
+                        current_forecast.coord(axis=axis).collapsed().bounds
                         != coeff_cube.coord(axis=axis).collapsed().bounds
                     ).all()
                 ):
                     raise ValueError(
                         msg.format(
                             axis,
-                            self.current_forecast.coord(axis=axis).collapsed(),
+                            current_forecast.coord(axis=axis).collapsed(),
                             coeff_cube.coord(axis=axis).collapsed(),
                         )
                     )
 
-    def _calculate_location_parameter_from_mean(self):
+    def _calculate_location_parameter_from_boosting(self, current_forecast):
         """
         Function to calculate the location parameter when the ensemble mean at
         each grid point is the predictor.
 
         Further information is available in the :mod:`module level docstring \
 <improver.calibration.ensemble_calibration>`.
+
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
+
+        Returns:
+            numpy.ndarray:
+                Location parameter calculated using the ensemble mean as the
+                predictor.
+
+        """
+        location_parameter = 0
+        for cf in current_forecast:
+            forecast_predictor = collapsed(
+                cf, "realization", iris.analysis.MEAN
+            )
+            constr = iris.Constraint(predictor_name=cf.name())
+            location_parameter += (
+                    self.coefficients_cubelist.extract(
+                        "ngb_coefficient_beta").extract(constr)[0].data
+                    * forecast_predictor.data).astype(np.float32)
+        print("location_parameter = ", location_parameter)
+        return location_parameter
+
+    def _calculate_scale_parameter_from_boosting(self, current_forecast):
+        """
+        Calculation of the scale parameter using the ensemble variance
+        adjusted using the gamma and delta coefficients calculated by NGB.
+
+        Further information is available in the :mod:`module level docstring \
+<improver.calibration.ensemble_calibration>`.
+
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
+
+        Returns:
+            numpy.ndarray:
+                Scale parameter for defining the distribution of the calibrated
+                forecast.
+
+        """
+        scale_parameter = 0
+        for cf in current_forecast:
+            forecast_var = cf.collapsed(
+                "realization", iris.analysis.VARIANCE
+            )
+            constr = iris.Constraint(predictor_name=cf.name())
+            scale_parameter += (
+                    self.coefficients_cubelist.extract(
+                        "ngb_coefficient_gamma").extract(constr)[0].data
+                    * forecast_var.data).astype(np.float32)
+        print("scale_parameter = ", scale_parameter)
+        return scale_parameter
+
+    def _calculate_location_parameter_from_mean(self, current_forecast):
+        """
+        Function to calculate the location parameter when the ensemble mean at
+        each grid point is the predictor.
+
+        Further information is available in the :mod:`module level docstring \
+<improver.calibration.ensemble_calibration>`.
+
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
 
         Returns:
             numpy.ndarray:
@@ -1405,7 +2015,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
 
         """
         forecast_predictor = collapsed(
-            self.current_forecast, "realization", iris.analysis.MEAN
+            current_forecast, "realization", iris.analysis.MEAN
         )
 
         # Calculate location parameter = a + b*X, where X is the
@@ -1418,7 +2028,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
 
         return location_parameter
 
-    def _calculate_location_parameter_from_realizations(self):
+    def _calculate_location_parameter_from_realizations(self, current_forecast):
         """
         Function to calculate the location parameter when the ensemble
         realizations are the predictor.
@@ -1426,12 +2036,16 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         Further information is available in the :mod:`module level docstring \
 <improver.calibration.ensemble_calibration>`.
 
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
+
         Returns:
             numpy.ndarray:
                 Location parameter calculated using the ensemble realizations
                 as the predictor.
         """
-        forecast_predictor = self.current_forecast
+        forecast_predictor = current_forecast
 
         # Calculate location parameter = a + b1*X1 .... + bn*Xn, where X is the
         # ensemble realizations. The number of b and X terms depends upon the
@@ -1453,7 +2067,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         )
         return location_parameter
 
-    def _calculate_scale_parameter(self):
+    def _calculate_scale_parameter(self, current_forecast):
         """
         Calculation of the scale parameter using the ensemble variance
         adjusted using the gamma and delta coefficients calculated by EMOS.
@@ -1461,13 +2075,17 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         Further information is available in the :mod:`module level docstring \
 <improver.calibration.ensemble_calibration>`.
 
+        Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
+
         Returns:
             numpy.ndarray:
                 Scale parameter for defining the distribution of the calibrated
                 forecast.
 
         """
-        forecast_var = self.current_forecast.collapsed(
+        forecast_var = current_forecast.collapsed(
             "realization", iris.analysis.VARIANCE
         )
         # Calculating the scale parameter, based on the raw variance S^2,
@@ -1482,11 +2100,13 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         ).astype(np.float32)
         return scale_parameter
 
-    def _create_output_cubes(self, location_parameter, scale_parameter):
+    def _create_output_cubes(self, current_forecast, location_parameter, scale_parameter):
         """
         Creation of output cubes containing the location and scale parameters.
 
         Args:
+            current_forecast (iris.cube.Cube):
+                The cube containing the current forecast.
             location_parameter (numpy.ndarray):
                 Location parameter of the calibrated distribution.
             scale_parameter (numpy.ndarray):
@@ -1501,7 +2121,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     Scale parameter of the calibrated distribution with
                     associated metadata.
         """
-        template_cube = next(self.current_forecast.slices_over("realization"))
+        template_cube = next(current_forecast.slices_over("realization"))
         template_cube.remove_coord("realization")
 
         location_parameter_cube = create_new_diagnostic_cube(
@@ -1527,8 +2147,9 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         distribution.
 
         Args:
-            current_forecast (iris.cube.Cube):
-                The cube containing the current forecast.
+            current_forecast (iris.cube.Cube or iris.cube.CubeList):
+                The cube or cubelist containing the current forecast and
+                any predictors, if using Nonhomogeneous Gaussian Boosting.
             coefficients_cubelist (iris.cube.CubeList):
                 CubeList of EMOS coefficients where each cube within the
                 cubelist is for a separate EMOS coefficient e.g. alpha, beta,
@@ -1555,23 +2176,32 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     larger scale parameter will result in a broader PDF.
 
         """
-        self.current_forecast = current_forecast
         self.coefficients_cubelist = coefficients_cubelist
         # Check coefficients_cube and forecast cube are compatible.
-        self._diagnostic_match()
-        for cube in coefficients_cubelist:
-            forecast_coords_match(cube, current_forecast)
-        self._spatial_domain_match()
 
-        if self.predictor.lower() == "mean":
-            location_parameter = self._calculate_location_parameter_from_mean()
+        if self.boosting:
+            print(type(current_forecast))
+            self._diagnostic_match(current_forecast)
+            for cf in current_forecast:
+                self._spatial_domain_match(cf)
+                for coeff_cube in coefficients_cubelist:
+                    forecast_coords_match(coeff_cube, cf)
+            location_parameter = self._calculate_location_parameter_from_boosting(current_forecast)
+            scale_parameter = self._calculate_scale_parameter_from_boosting(current_forecast)
         else:
-            location_parameter = self._calculate_location_parameter_from_realizations()
+            self._spatial_domain_match(current_forecast)
+            self._diagnostic_match(current_forecast)
+            for cube in coefficients_cubelist:
+                forecast_coords_match(cube, current_forecast)
+            if self.predictor.lower() == "mean":
+                location_parameter = self._calculate_location_parameter_from_mean(current_forecast)
+            else:
+                location_parameter = self._calculate_location_parameter_from_realizations(current_forecast)
 
-        scale_parameter = self._calculate_scale_parameter()
+            scale_parameter = self._calculate_scale_parameter(current_forecast)
 
         location_parameter_cube, scale_parameter_cube = self._create_output_cubes(
-            location_parameter, scale_parameter
+            current_forecast[0], location_parameter, scale_parameter
         )
 
         # Use a mask to confine calibration to land regions by masking the
@@ -1764,11 +2394,12 @@ class ApplyEMOS(PostProcessingPlugin):
         predictor="mean",
         randomise=False,
         random_seed=None,
+        boosting=False,
     ):
         """Calibrate input forecast using pre-calculated coefficients
 
         Args:
-            forecast (iris.cube.Cube):
+            forecast (iris.cube.CubeList):
                 Uncalibrated forecast as probabilities, percentiles or
                 realizations
             coefficients (iris.cube.CubeList):
@@ -1792,23 +2423,56 @@ class ApplyEMOS(PostProcessingPlugin):
             random_seed (int or None):
                 Used in generating calibrated realizations.  If input forecast
                 is probabilities or percentiles, this is ignored.
+            boosting (bool):
+                If True, enable nonhomogeneous boosting following
+                Messner et al., 2017 allowing multiple predictors to be provided.
+                If False, coefficients are estimated using EMOS.
 
         Returns:
             iris.cube.Cube:
                 Calibrated forecast in the form of the input (ie probabilities
                 percentiles or realizations)
         """
-        self.forecast_type = self._get_forecast_type(forecast)
+        if boosting and isinstance(forecast, iris.cube.Cube):
+            msg = ("A forecast cubelist must be supplied, if the coefficients have been "
+                   "calculated using Nonhomogeneous Gaussian Boosting.")
+            raise ValueError(msg)
+        elif not boosting and isinstance(forecast, iris.cube.CubeList):
+            msg = ("A forecast cube (not cubelist) must be supplied, if the coefficients have been "
+                   "calculated using Ensemble Model Output Statistics.")
+            raise ValueError(msg)
 
-        forecast_as_realizations = forecast.copy()
-        if self.forecast_type != "realizations":
-            forecast_as_realizations = self._convert_to_realizations(
-                forecast.copy(), realizations_count, ignore_ecc_bounds
+        if boosting:
+            self.forecast_type = self._get_forecast_type(forecast[0])
+
+            if self.forecast_type != "realizations":
+                forecast_as_realizations = iris.cube.CubeList()
+                for diag_cube in forecast:
+                    forecast_as_realizations.append(self._convert_to_realizations(
+                        diag_cube.copy(), realizations_count, ignore_ecc_bounds
+                    ))
+            else:
+                forecast_as_realizations = iris.cube.CubeList()
+                for diag_cube in forecast:
+                    forecast_as_realizations.append(diag_cube.copy())
+            # Identify diagnostic to be calibrated using an attribute.
+            constr = iris.Constraint(coefficients[0].attributes["diagnostic_standard_name"])
+            forecast = forecast.extract(constr)[0]
+            calibration_plugin = CalibratedForecastDistributionParameters(
+                predictor=predictor, boosting=boosting
+            )
+        else:
+            self.forecast_type = self._get_forecast_type(forecast)
+
+            forecast_as_realizations = forecast.copy()
+            if self.forecast_type != "realizations":
+                forecast_as_realizations = self._convert_to_realizations(
+                    forecast.copy(), realizations_count, ignore_ecc_bounds
+                )
+            calibration_plugin = CalibratedForecastDistributionParameters(
+                predictor=predictor
             )
 
-        calibration_plugin = CalibratedForecastDistributionParameters(
-            predictor=predictor
-        )
         location_parameter, scale_parameter = calibration_plugin(
             forecast_as_realizations, coefficients, landsea_mask=land_sea_mask
         )

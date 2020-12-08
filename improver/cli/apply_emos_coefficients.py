@@ -47,7 +47,7 @@ inputcoeffs = cli.create_constrained_inputcubelist_converter(
 @cli.clizefy
 @cli.with_output
 def process(
-    cube: cli.inputcube,
+    cubes: cli.inputcubelist,
     coefficients: inputcoeffs = None,
     land_sea_mask: cli.inputcube = None,
     *,
@@ -56,6 +56,7 @@ def process(
     random_seed: int = None,
     ignore_ecc_bounds=False,
     predictor="mean",
+    boosting=False,
 ):
     """Applying coefficients for Ensemble Model Output Statistics.
 
@@ -67,8 +68,9 @@ def process(
     forecast is returned unchanged.
 
     Args:
-        cube (iris.cube.Cube):
-            A Cube containing the forecast to be calibrated. The input format
+        cubes (iris.cube.CubeList):
+            A Cube containing the forecast to be calibrated and any predictors,
+            if using Nonhomogeneous Gaussian Boosting. The input format
             could be either realizations, probabilities or percentiles.
         coefficients (iris.cube.CubeList):
             A cubelist containing the coefficients used for calibration or None.
@@ -107,6 +109,12 @@ def process(
             the location parameter when estimating the EMOS coefficients.
             Currently the ensemble mean ("mean") and the ensemble
             realizations ("realizations") are supported as the predictors.
+        boosting (bool):
+            If True, the forecast is calibrated using coefficients computed
+            using nonhomogeneous boosting following Messner et al., 2017
+            allowing multiple predictors to be provided.
+            If False, the coefficients applied are expected to have been
+            estimated using EMOS.
 
     Returns:
         iris.cube.Cube:
@@ -126,13 +134,16 @@ def process(
 
     from improver.calibration.ensemble_calibration import ApplyEMOS
 
+    if len(cubes) == 1:
+        cubes = cubes[0]
+
     if coefficients is None:
         msg = (
             "There are no coefficients provided for calibration. The "
             "uncalibrated forecast will be returned."
         )
         warnings.warn(msg)
-        return cube
+        return cubes
 
     if land_sea_mask and land_sea_mask.name() != "land_binary_mask":
         msg = "The land_sea_mask cube does not have the name 'land_binary_mask'"
@@ -140,7 +151,7 @@ def process(
 
     calibration_plugin = ApplyEMOS()
     result = calibration_plugin(
-        cube,
+        cubes,
         coefficients,
         land_sea_mask=land_sea_mask,
         realizations_count=realizations_count,
@@ -148,6 +159,7 @@ def process(
         predictor=predictor,
         randomise=randomise,
         random_seed=random_seed,
+        boosting=boosting
     )
 
     return result
