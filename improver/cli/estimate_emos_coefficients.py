@@ -125,7 +125,7 @@ def process(
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
-    print(cubes)
+
     if number_of_predictors > 1 and not boosting:
         msg = "The number of predictors only needs to be specified with boosting."
         raise ValueError(msg)

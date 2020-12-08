@@ -880,20 +880,6 @@ class Boosting(BasePlugin):
                 coefficients.
 
         """
-        # import pandas as pd
-        # data = {
-        #     "truth": truth.data.flatten(),
-        #     "forecast_predictor_0": forecast_predictors[0].data.flatten(),
-        #     "forecast_predictor_1": forecast_predictors[1].data.flatten(),
-        #     "forecast_predictor_2": forecast_predictors[2].data.flatten(),
-        #     "forecast_predictor_3": forecast_predictors[3].data.flatten(),
-        #     "forecast_var_0": forecast_vars[0].data.flatten(),
-        #     "forecast_var_1": forecast_vars[1].data.flatten(),
-        #     "forecast_var_2": forecast_vars[2].data.flatten(),
-        #     "forecast_var_3": forecast_vars[3].data.flatten(),
-        # }
-        # df = pd.DataFrame(data=data)
-        # df.to_csv("/home/h06/gevans/impro/improver_ml/predictor_df.csv")
         # Standardise the truth and forecasts.
         # Assume the mean and standard deviation of the forecasts and truths
         # are gaussian and therefore assume that the mean equals the
@@ -959,63 +945,6 @@ class Boosting(BasePlugin):
         )
 
         return optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)
-        #np.concatenate((optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)))
-
-    def process_with_r(
-        self, truth, forecast_predictor, forecast_var,
-    ):
-        import pandas as pd
-        import rpy2.robjects as ro
-        from rpy2.robjects import Formula, pandas2ri
-        from rpy2.robjects.conversion import localconverter
-        from rpy2.robjects.packages import importr
-
-        # truth_data, _, _ = self._standardise_truth(truth.data)
-        # forecast_predictor_data = self._standardise(forecast_predictor.data.data)
-        # forecast_var_data = self._standardise(forecast_var.data.data)
-
-        data = {
-            "truth": truth.data.flatten(),
-            "forecast_predictor_0": forecast_predictor[0].data.flatten(),
-            "forecast_predictor_1": forecast_predictor[1].data.flatten(),
-            "forecast_predictor_2": forecast_predictor[2].data.flatten(),
-            "forecast_predictor_3": forecast_predictor[3].data.flatten(),
-            "forecast_var_0": forecast_var[0].data.flatten(),
-            "forecast_var_1": forecast_var[1].data.flatten(),
-            "forecast_var_2": forecast_var[2].data.flatten(),
-            "forecast_var_3": forecast_var[3].data.flatten(),
-        }
-        # "forecast_predictor": np.array([fp.data.flatten() for fp in forecast_predictor]).flatten(),
-        # "forecast_var": np.array([fv.data.flatten() for fv in forecast_var]).flatten()}
-        print("data = ", data)
-        df = pd.DataFrame(data=data)
-
-        crch = importr("crch")
-        with localconverter(ro.default_converter + pandas2ri.converter):
-            r_dataframe = ro.conversion.py2rpy(df)
-        df.to_csv("/home/h06/gevans/impro/improver_ml/predictor_df.csv")
-        crch_model = crch.crch(
-            Formula(
-                "truth~forecast_predictor_0+forecast_predictor_1+forecast_predictor_2+forecast_predictor_3|forecast_var_0+forecast_var_1+forecast_var_2+forecast_var_3"
-            ),
-            data=r_dataframe,
-            dist=self.distribution,
-            link_scale="log",
-            method="boosting",
-            maxit=self.max_iterations,
-            mstop="aic",
-        )
-        coefficients = crch_model.rx2("coefficients")
-        print("coefficients = ", crch_model.rx2("coefficients"))
-        coeff_dict = dict(zip(coefficients.names, np.array(coefficients)))
-        print("coeff_dict = ", coeff_dict)
-        optimised_coeffs = np.array(
-            list(coeff_dict["location"][:2])
-            + coeff_dict["scale"][0]
-            + coeff_dict["scale"][2]
-        )
-
-        return optimised_coeffs.astype(np.float32)
 
 
 class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
@@ -1772,8 +1701,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
 
         # Ensure predictor is valid.
         check_predictor(self.predictor)
-        print("historic_forecasts = ", historic_forecasts)
-        print("truths = ", truths)
         if self.boosting:
             if isinstance(historic_forecasts, iris.cube.Cube):
                 historic_forecasts = iris.cube.CubeList([historic_forecasts])
@@ -1801,17 +1728,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 [self.mask_cube(fv, landsea_mask) for fv in forecast_vars]
                 [self.mask_cube(t, landsea_mask) for t in truths]
 
-            print("truths = ", truths)
-            print("forecast_predictors = ", forecast_predictors)
-            print("forecast_vars = ", forecast_vars)
-
             coefficients_cubelist = self.minimise_boosting(
                 truths,
                 historic_forecasts,
                 forecast_predictors,
                 forecast_vars,
             )
-            print("coefficients_cubelist = ", coefficients_cubelist)
         else:
             self._prepare_inputs(historic_forecasts, truths)
             (
@@ -1856,7 +1778,11 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                 the location parameter when estimating the EMOS coefficients.
                 Currently the ensemble mean ("mean") and the ensemble
                 realizations ("realizations") are supported as the predictors.
-
+            boosting (bool):
+                If True, apply coefficients computed using nonhomogeneous
+                boosting following Messner et al., 2017 allowing multiple
+                predictors to be provided.
+                If False, coefficients are estimated using EMOS.
 
         """
         check_predictor(predictor)
@@ -1962,7 +1888,6 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     self.coefficients_cubelist.extract(
                         "ngb_coefficient_beta").extract(constr)[0].data
                     * forecast_predictor.data).astype(np.float32)
-        print("location_parameter = ", location_parameter)
         return location_parameter
 
     def _calculate_scale_parameter_from_boosting(self, current_forecast):
@@ -1993,7 +1918,6 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     self.coefficients_cubelist.extract(
                         "ngb_coefficient_gamma").extract(constr)[0].data
                     * forecast_var.data).astype(np.float32)
-        print("scale_parameter = ", scale_parameter)
         return scale_parameter
 
     def _calculate_location_parameter_from_mean(self, current_forecast):
@@ -2142,9 +2066,9 @@ class CalibratedForecastDistributionParameters(BasePlugin):
 
     def process(self, current_forecast, coefficients_cubelist, landsea_mask=None):
         """
-        Apply the EMOS coefficients to the current forecast, in order to
-        generate location and scale parameters for creating the calibrated
-        distribution.
+        Apply the EMOS or Nonhomogeneous Boosting coefficients to the current
+        forecast, in order to generate location and scale parameters for
+        creating the calibrated distribution.
 
         Args:
             current_forecast (iris.cube.Cube or iris.cube.CubeList):
@@ -2180,7 +2104,6 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         # Check coefficients_cube and forecast cube are compatible.
 
         if self.boosting:
-            print(type(current_forecast))
             self._diagnostic_match(current_forecast)
             for cf in current_forecast:
                 self._spatial_domain_match(cf)
@@ -2424,8 +2347,9 @@ class ApplyEMOS(PostProcessingPlugin):
                 Used in generating calibrated realizations.  If input forecast
                 is probabilities or percentiles, this is ignored.
             boosting (bool):
-                If True, enable nonhomogeneous boosting following
-                Messner et al., 2017 allowing multiple predictors to be provided.
+                If True, apply coefficients computed using nonhomogeneous
+                boosting following Messner et al., 2017 allowing multiple
+                predictors to be provided.
                 If False, coefficients are estimated using EMOS.
 
         Returns:
@@ -2458,9 +2382,6 @@ class ApplyEMOS(PostProcessingPlugin):
             # Identify diagnostic to be calibrated using an attribute.
             constr = iris.Constraint(coefficients[0].attributes["diagnostic_standard_name"])
             forecast = forecast.extract(constr)[0]
-            calibration_plugin = CalibratedForecastDistributionParameters(
-                predictor=predictor, boosting=boosting
-            )
         else:
             self.forecast_type = self._get_forecast_type(forecast)
 
@@ -2469,9 +2390,10 @@ class ApplyEMOS(PostProcessingPlugin):
                 forecast_as_realizations = self._convert_to_realizations(
                     forecast.copy(), realizations_count, ignore_ecc_bounds
                 )
-            calibration_plugin = CalibratedForecastDistributionParameters(
-                predictor=predictor
-            )
+
+        calibration_plugin = CalibratedForecastDistributionParameters(
+            predictor=predictor, boosting=boosting
+        )
 
         location_parameter, scale_parameter = calibration_plugin(
             forecast_as_realizations, coefficients, landsea_mask=land_sea_mask
