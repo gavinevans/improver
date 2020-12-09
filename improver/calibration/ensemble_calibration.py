@@ -642,6 +642,10 @@ class Boosting(BasePlugin):
                 Correlations and index of the maximum correlation.
         """
         means = np.mean(forecast * -partial_derivative, axis=1)
+        if all(means == np.nan):
+            print("means = ", means)
+            print("forecast = ", forecast)
+            print("partial_derivative = ", partial_derivative)
         return means, np.nanargmax(np.abs(means))
 
     def _update_coefficients(self, coeffs, corrcoef, corrcoef_index):
@@ -863,7 +867,7 @@ class Boosting(BasePlugin):
 
         return lp_coeffs, sp_coeffs
 
-    def process(self, truth, forecast_predictors, forecast_vars):
+    def process(self, site_index, truth, forecast_predictors, forecast_vars):
         """Produce optimised coefficients using nonhomogeneous boosting.
 
         Args:
@@ -880,6 +884,10 @@ class Boosting(BasePlugin):
                 coefficients.
 
         """
+        #print("site_index = ", site_index)
+        # print("truth = ", truth)
+        # print("forecast_predictors = ", forecast_predictors)
+        # print("forecast_vars = ", forecast_vars)
         # Standardise the truth and forecasts.
         # Assume the mean and standard deviation of the forecasts and truths
         # are gaussian and therefore assume that the mean equals the
@@ -930,8 +938,6 @@ class Boosting(BasePlugin):
                 index
             ] = optimised_sp_coeffs.tolist()
 
-        self.coeffs_to_json(optimised_coeffs_dict)
-
         # Re-standardise the coefficients for application.
         optimised_lp_coeffs = self.convert_lp_coefficients(
             optimised_lp_coeffs,
@@ -943,7 +949,8 @@ class Boosting(BasePlugin):
         optimised_sp_coeffs = self.convert_sp_coefficients(
             optimised_sp_coeffs, forecast_var_mean, forecast_var_std, truth_std
         )
-
+        # print("optimised_lp_coeffs = ", optimised_lp_coeffs)
+        # print("optimised_sp_coeffs = ", optimised_sp_coeffs)
         return optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)
 
 
@@ -1541,13 +1548,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 cubelist is for a separate EMOS coefficient e.g. alpha, beta,
                 gamma, delta.
 
-        Returns:
-            iris.cube.CubeList:
-                CubeList constructed using the coefficients provided and using
-                metadata from the historic_forecasts cube. Each cube within the
-                cubelist is for a separate EMOS coefficient e.g. alpha, beta,
-                gamma, delta.
-
         """
         sm = self._get_statsmodels_availability()
         if self.each_point:
@@ -1622,24 +1622,106 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         return coefficients_cubelist
 
     def minimise_boosting(self, truths, historic_forecasts, forecast_predictors, forecast_vars):
+        """Function to consolidate calls to compute the initial guess, compute
+        the optimised coefficients using minimisation and store the resulting
+        coefficients within a CubeList.
+
+        Args:
+            truths (iris.cube.Cube):
+                Truths from the training dataset.
+            historic_forecasts (iris.cube.Cube):
+                Historic forecasts from the training dataset.
+            forecast_predictor (iris.cube.Cube):
+                Predictor of the forecast within the minimisation. This
+                is either ensemble mean or the ensemble realizations.
+            forecast_var (iris.cube.Cube):
+                Variance of the forecast for use in the minimisation.
+
+        Returns:
+            iris.cube.CubeList:
+                CubeList constructed using the coefficients provided and using
+                metadata from the historic_forecasts cube. Each cube within the
+                cubelist is for a separate Nonhomogeneous Boosting coefficient
+                i.e. beta and gamma.
+
+        """
         if self.each_point | self.minimise_each_point:
             index = [
                 forecast_predictors[0].coord(axis="y"),
                 forecast_predictors[0].coord(axis="x"),
             ]
 
+            truths = truths[:, 0:10]
+            fps = []
+            for fp in forecast_predictors:
+                fps.append(fp[:, 0:10])
+            forecast_predictors = fps
+            fvs = []
+            for fv in forecast_vars:
+                fvs.append(fp[:, 0:10])
+            forecast_vars = fvs
+
+            print("truths = ", truths)
+            for fp in forecast_predictors:
+                print("forecast_predictors = ", fp)
+            for fv in forecast_vars:
+                print("forecast_vars = ", fv)
+
             argument_list = []
-            for fp, fv in zip(forecast_predictors, forecast_vars):
-                for truth_slice, fp_slice, fv_slice in zip(truths.slices_over(index), fp.slices_over(index), fv.slices_over(index)):
-                    argument_list.append([truth_slice, fp_slice, fv_slice])
+            #for fp, fv in zip(forecast_predictors, forecast_vars):
+            # for fp in forecast_predictors:
+            #     fp.slices_over(index)
+            #list_comp = [iris.cube.CubeList([f.slices_over(index) for f in fp]) for fp in zip(*forecast_predictors)]
+
+            #print("list_comp = ", list_comp)
+            fp_slices = [fp.slices_over(index) for fp in forecast_predictors]
+            fv_slices = [fv.slices_over(index) for fv in forecast_vars]
+
+            # import pdb
+            # pdb.set_trace()
+
+            truths.coord("latitude").var_name = None
+            truths.coord("longitude").var_name = None
+
+            # print("truths = ", truths)
+            # print("truths = ", truths.coord(axis="y"))
+            # print("truths = ", truths.coord(axis="x"))
+            # print("index = ", index)
+
+            # for truth_slice in truths.slices_over(index):
+            #     argument_list.append([truth_slice])
+
+            # for fp_slice in zip(*fp_slices):
+            #     argument_list.append([fp_slice])
+
+            # for fv_slice in zip(*fv_slices):
+            #     argument_list.append([fv_slice])
+
+            #zipped_list = [truths.slices_over(index), fp_slices, fv_slices]
+
+            for site_index, items in enumerate(zip(truths.slices_over(index), *fp_slices, *fv_slices)):
+                truth_slice = items[0]
+                fp_slice = items[1:len(forecast_predictors)+1]
+                fv_slice = items[len(forecast_predictors)+1:len(forecast_predictors)+len(forecast_vars)+1]
+                argument_list.append([site_index, truth_slice, fp_slice, fv_slice])
+
+            #print("argument_list = ", argument_list)
 
             with Pool(os.cpu_count()) as pool:
                 optimised_coeffs = pool.starmap(self.minimiser.process, argument_list)
+
+            optimised_coeffs = np.stack(optimised_coeffs, axis=1)
+            print("optimised_coeffs = ", optimised_coeffs)
+            # np.array(np.transpose(optimised_coeffs)).reshape(
+            #     (len(initial_guess[0]),) + forecast_predictor.data.shape[1:]
+            # )
 
         else:
             optimised_coeffs = self.minimiser.process(
                 truths, forecast_predictors, forecast_vars,
             )
+
+        #coeffs_to_json(optimised_coeffs_dict)
 
         predictor_names = ["intercept"] + [fp.name() for fp in forecast_predictors]
         coefficients_cubelist = self.create_coefficients_cubelist(
