@@ -839,7 +839,7 @@ class ConvertLocationAndScaleParametersToPercentiles(
                 result[index, nan_index] = location_data[nan_index]
             if np.any(np.isnan(result)):
                 msg = (
-                    "NaNs are present within the result for the {} "
+                    f"NaNs are present within the result for the {percentile} "
                     "percentile. Unable to calculate the percent point "
                     "function."
                 )

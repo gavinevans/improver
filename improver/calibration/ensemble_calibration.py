@@ -531,7 +531,9 @@ class Boosting(BasePlugin):
         for forecast in forecasts:
             forecast = forecast.data.data.flatten()
             means.append(np.mean(forecast))
-            stds.append(np.std(forecast))
+            # Specify a minimum value for the standard deviation to avoid
+            # infinite numbers, as in Messner et al., 2017.
+            stds.append(max(np.std(forecast), 0.0001))
             standardised_forecasts.append((forecast - means[-1]) / stds[-1])
         return np.stack(standardised_forecasts), means, stds
 
@@ -642,10 +644,6 @@ class Boosting(BasePlugin):
                 Correlations and index of the maximum correlation.
         """
         means = np.mean(forecast * -partial_derivative, axis=1)
-        if all(means == np.nan):
-            print("means = ", means)
-            print("forecast = ", forecast)
-            print("partial_derivative = ", partial_derivative)
         return means, np.nanargmax(np.abs(means))
 
     def _update_coefficients(self, coeffs, corrcoef, corrcoef_index):
@@ -884,10 +882,6 @@ class Boosting(BasePlugin):
                 coefficients.
 
         """
-        #print("site_index = ", site_index)
-        # print("truth = ", truth)
-        # print("forecast_predictors = ", forecast_predictors)
-        # print("forecast_vars = ", forecast_vars)
         # Standardise the truth and forecasts.
         # Assume the mean and standard deviation of the forecasts and truths
         # are gaussian and therefore assume that the mean equals the
@@ -949,9 +943,7 @@ class Boosting(BasePlugin):
         optimised_sp_coeffs = self.convert_sp_coefficients(
             optimised_sp_coeffs, forecast_var_mean, forecast_var_std, truth_std
         )
-        # print("optimised_lp_coeffs = ", optimised_lp_coeffs)
-        # print("optimised_sp_coeffs = ", optimised_sp_coeffs)
-        return optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)
+        return optimised_coeffs_dict, optimised_lp_coeffs.astype(np.float32), optimised_sp_coeffs.astype(np.float32)
 
 
 class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
@@ -1173,9 +1165,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
 
         return [(frt_coord, None), (fp_coord, None)]
 
-    @staticmethod
-    def _create_spatial_coordinates(historic_forecasts):
-        """Create spatial coordinates for the EMOS coefficients cube.
+    def _create_spatial_dim_coordinates(self, historic_forecasts):
+        """Create spatial dimension coordinates for the EMOS coefficients cube.
 
         Args:
             historic_forecasts (iris.cube.Cube):
@@ -1186,15 +1177,50 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 List of tuples of the spatial coordinates and the associated
                 dimension. This format is suitable for use by iris.cube.Cube.
         """
-        spatial_coords_and_dims = []
+        if not self.each_point and not self.minimise_each_point:
+            return []
+
+        spatial_coord_dims = []
         for axis in ["x", "y"]:
-            spatial_coords_and_dims.append(
-                (historic_forecasts.coord(axis=axis).collapsed(), None)
-            )
-        return spatial_coords_and_dims
+            spatial_coord_dims.append(historic_forecasts.coord_dims(historic_forecasts.coord(axis=axis).name()))
+        dim_coords_and_dims = []
+        # Remove dims where x and y axis share a dimension coordinate (as for a spot forecast cube)
+        spatial_coord_dims = list(set(spatial_coord_dims))
+        for index, dim in enumerate(spatial_coord_dims):
+            spatial_dim_coord, = historic_forecasts.coords(dimensions=dim, dim_coords=True)
+            dim_coords_and_dims.append((spatial_dim_coord, index))
+        return dim_coords_and_dims
+
+    def _create_spatial_aux_coordinates(self, historic_forecasts):
+        """Create spatial auxiliary coordinates for the EMOS coefficients cube.
+
+        Args:
+            historic_forecasts (iris.cube.Cube):
+                Historic forecasts from the training dataset.
+
+        Returns:
+            list of tuples:
+                List of tuples of the spatial coordinates and the associated
+                dimension. This format is suitable for use by iris.cube.Cube.
+        """
+        if self.each_point | self.minimise_each_point:
+            aux_coords_and_dims = []
+            for index, axis in enumerate(["x", "y"]):
+                spatial_coord_dim = historic_forecasts.coord_dims(historic_forecasts.coord(axis=axis).name())
+                for coord in historic_forecasts.coords(dimensions=spatial_coord_dim, dim_coords=False):
+                    if not any([True if c[0] == coord else False for c in aux_coords_and_dims]):
+                        aux_coords_and_dims.append((historic_forecasts.coord(coord), index))
+        else:
+            aux_coords_and_dims = []
+            for axis in ["x", "y"]:
+                aux_coords_and_dims.append(
+                    (historic_forecasts.coord(axis=axis).collapsed(), None)
+                )
+        return aux_coords_and_dims
 
     def _create_cubelist(
-        self, optimised_coeffs, historic_forecasts, aux_coords_and_dims, attributes
+        self, optimised_coeffs, historic_forecasts, dim_coords_and_dims,
+        aux_coords_and_dims, attributes
     ):
         """Create a cubelist by combining the optimised coefficients and the
         appropriate metadata. The units of the alpha and gamma coefficients
@@ -1206,6 +1232,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             optimised_coeffs (numpy.ndarray)
             historic_forecasts (iris.cube.Cube):
                 Historic forecasts from the training dataset.
+            dim_coords_and_dims (list of tuples):
+                List of tuples of the format [(coord, dim), (coord, dim)]
             aux_coords_and_dims (list of tuples):
                 List of tuples of the format [(coord, dim), (coord, dim)]
             attributes (dict):
@@ -1224,16 +1252,16 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             coeff_units = "1"
             if coeff_name in ["alpha", "gamma"]:
                 coeff_units = historic_forecasts.units
-            dim_coords_and_dims = []
+            dim_coords_and_dims_updated = dim_coords_and_dims[:]
             if self.predictor.lower() == "realizations" and coeff_name == "beta":
-                dim_coords_and_dims = [
+                dim_coords_and_dims_updated.append(
                     (historic_forecasts.coord("realization").copy(), 0)
-                ]
+                )
             cube = iris.cube.Cube(
                 optimised_coeff,
                 long_name=f"emos_coefficient_{coeff_name}",
                 units=coeff_units,
-                dim_coords_and_dims=dim_coords_and_dims,
+                dim_coords_and_dims=dim_coords_and_dims_updated,
                 aux_coords_and_dims=aux_coords_and_dims,
                 attributes=attributes,
             )
@@ -1241,7 +1269,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         return cubelist
 
     def _create_cubelist_from_boosting(
-        self, optimised_coeffs, aux_coords_and_dims, attributes, predictor_names
+        self, optimised_coeffs, dim_coords_and_dims,
+        aux_coords_and_dims, attributes, predictor_names
     ):
         """Create a cubelist by combining the optimised coefficients and the
         appropriate metadata. A predictor_index coordinate and predictor_names
@@ -1250,6 +1279,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
 
         Args:
             optimised_coeffs (numpy.ndarray)
+            dim_coords_and_dims (list of tuples):
+                List of tuples of the format [(coord, dim), (coord, dim)]
             aux_coords_and_dims (list of tuples):
                 List of tuples of the format [(coord, dim), (coord, dim)]
             attributes (dict):
@@ -1265,13 +1296,18 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 cubelist is for a separate Nonhomogeneous boosting coefficient
                 i.e. beta and gamma.
         """
-        dim_coords_and_dims = [
+        # Increment dimension for dimension coordinates
+        dim_coords_and_dims = [(x[0], x[1]+1) for x in dim_coords_and_dims]
+        dim_coords_and_dims.append(
             (iris.coords.DimCoord(list(range(len(predictor_names))),
                                   long_name="predictor_index"), 0)
-        ]
-        aux_coords_and_dims.extend(
-            [(iris.coords.AuxCoord(predictor_names, long_name="predictor_name"), 0)]
         )
+        # Increment dimension for auxiliary coordinates
+        aux_coords_and_dims = [x if x[1] is None else (x[0], x[1]+1) for x in aux_coords_and_dims]
+        aux_coords_and_dims.append(
+            (iris.coords.AuxCoord(predictor_names, long_name="predictor_name"), 0)
+        )
+
         cubelist = iris.cube.CubeList([])
         for optimised_coeff, coeff_name in zip(optimised_coeffs, self.coeff_names):
             cube = iris.cube.Cube(
@@ -1330,18 +1366,17 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             )
             raise ValueError(msg)
 
+        dim_coords_and_dims = self._create_spatial_dim_coordinates(historic_forecasts)
         aux_coords_and_dims = self._create_temporal_coordinates(historic_forecasts)
-        aux_coords_and_dims.extend(self._create_spatial_coordinates(historic_forecasts))
+        aux_coords_and_dims.extend(self._create_spatial_aux_coordinates(historic_forecasts))
         attributes = self._set_attributes(historic_forecasts)
-
         if self.boosting:
-            print("aux_coords_and_dims = ", aux_coords_and_dims)
             return self._create_cubelist_from_boosting(
-                optimised_coeffs, aux_coords_and_dims, attributes, predictor_names
+                optimised_coeffs, dim_coords_and_dims, aux_coords_and_dims, attributes, predictor_names
             )
         else:
             return self._create_cubelist(
-                optimised_coeffs, historic_forecasts, aux_coords_and_dims, attributes
+                optimised_coeffs, historic_forecasts, dim_coords_and_dims, aux_coords_and_dims, attributes
             )
 
     def compute_initial_guess(
@@ -1515,6 +1550,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         )
         return forecast_predictor, forecast_var, number_of_realizations
 
+    # def coeffs_to_json(self, optimised_coeffs_dict):
+    #     import json
+
+    #     with open("coefficients.json", "w") as fp:
+    #         json.dump(optimised_coeffs_dict, fp)
+
     def guess_and_minimise(
         self,
         truths,
@@ -1549,7 +1590,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 gamma, delta.
 
         """
-        sm = self._get_statsmodels_availability()
+        sm = False #self._get_statsmodels_availability()
         if self.each_point:
             index = [
                 forecast_predictor.coord(axis="y"),
@@ -1651,83 +1692,45 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 forecast_predictors[0].coord(axis="x"),
             ]
 
-            truths = truths[:, 0:10]
-            fps = []
-            for fp in forecast_predictors:
-                fps.append(fp[:, 0:10])
-            forecast_predictors = fps
-            fvs = []
-            for fv in forecast_vars:
-                fvs.append(fp[:, 0:10])
-            forecast_vars = fvs
-
-            print("truths = ", truths)
-            for fp in forecast_predictors:
-                print("forecast_predictors = ", fp)
-            for fv in forecast_vars:
-                print("forecast_vars = ", fv)
-
-            argument_list = []
-            #for fp, fv in zip(forecast_predictors, forecast_vars):
-            # for fp in forecast_predictors:
-            #     fp.slices_over(index)
-            #list_comp = [iris.cube.CubeList([f.slices_over(index) for f in fp]) for fp in zip(*forecast_predictors)]
-
-            #print("list_comp = ", list_comp)
             fp_slices = [fp.slices_over(index) for fp in forecast_predictors]
             fv_slices = [fv.slices_over(index) for fv in forecast_vars]
-
-            # import pdb
-            # pdb.set_trace()
 
             truths.coord("latitude").var_name = None
             truths.coord("longitude").var_name = None
 
-            # print("truths = ", truths)
-            # print("truths = ", truths.coord(axis="y"))
-            # print("truths = ", truths.coord(axis="x"))
-            # print("index = ", index)
-
-            # for truth_slice in truths.slices_over(index):
-            #     argument_list.append([truth_slice])
-
-            # for fp_slice in zip(*fp_slices):
-            #     argument_list.append([fp_slice])
-
-            # for fv_slice in zip(*fv_slices):
-            #     argument_list.append([fv_slice])
-
-            #zipped_list = [truths.slices_over(index), fp_slices, fv_slices]
-
+            argument_list = []
             for site_index, items in enumerate(zip(truths.slices_over(index), *fp_slices, *fv_slices)):
                 truth_slice = items[0]
                 fp_slice = items[1:len(forecast_predictors)+1]
                 fv_slice = items[len(forecast_predictors)+1:len(forecast_predictors)+len(forecast_vars)+1]
                 argument_list.append([site_index, truth_slice, fp_slice, fv_slice])
 
-            #print("argument_list = ", argument_list)
+
+            # for site_index, truth_slice, fp_slice, fv_slice in argument_list:
+            #     optimised_coeffs = self.minimiser.process(
+            #         site_index, truth_slice, fp_slice, fv_slice,
+            #     )
 
             with Pool(os.cpu_count()) as pool:
                 optimised_coeffs = pool.starmap(self.minimiser.process, argument_list)
 
-            optimised_coeffs = np.stack(optimised_coeffs, axis=1)
-            print("optimised_coeffs = ", optimised_coeffs)
-            # np.array(np.transpose(optimised_coeffs)).reshape(
-            #     (len(initial_guess[0]),) + forecast_predictor.data.shape[1:]
-            # )
+            optimised_coeffs_dict = {index: c[0] for index, c in enumerate(optimised_coeffs)}
+            optimised_coeffs = [(c[1], c[2]) for c in optimised_coeffs]
+
+            optimised_coeffs = np.transpose(np.stack(optimised_coeffs, axis=1), (0, 2, 1))
 
         else:
             optimised_coeffs = self.minimiser.process(
-                truths, forecast_predictors, forecast_vars,
+                0, truths, forecast_predictors, forecast_vars,
             )
-
-        #coeffs_to_json(optimised_coeffs_dict)
+            optimised_coeffs_dict = optimised_coeffs[0]
+            optimised_coeffs = optimised_coeffs[1:]
 
         predictor_names = ["intercept"] + [fp.name() for fp in forecast_predictors]
         coefficients_cubelist = self.create_coefficients_cubelist(
             optimised_coeffs, historic_forecasts[0], predictor_names=predictor_names
         )
-        return coefficients_cubelist
+        return coefficients_cubelist, optimised_coeffs_dict
 
     def process(self, historic_forecasts, truths, landsea_mask=None):
         """
@@ -1817,6 +1820,11 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 forecast_vars,
             )
         else:
+            if isinstance(historic_forecasts, iris.cube.CubeList):
+                historic_forecasts = historic_forecasts.merge_cube()
+            if isinstance(truths, iris.cube.CubeList):
+                truths = truths.merge_cube()
+
             self._prepare_inputs(historic_forecasts, truths)
             (
                 forecast_predictor,
@@ -1830,13 +1838,14 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 self.mask_cube(forecast_var, landsea_mask)
                 self.mask_cube(truths, landsea_mask)
 
-            coefficients_cubelist = self.guess_and_minimise(
+            coefficients_cubelist, optimised_coeffs_dict = self.guess_and_minimise(
                 truths,
                 historic_forecasts,
                 forecast_predictor,
                 forecast_var,
                 number_of_realizations,
             )
+            return coefficients_cubelist, optimised_coeffs_dict
 
         return coefficients_cubelist
 
@@ -1970,6 +1979,8 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     self.coefficients_cubelist.extract(
                         "ngb_coefficient_beta").extract(constr)[0].data
                     * forecast_predictor.data).astype(np.float32)
+        constr = iris.Constraint(predictor_name="intercept")
+        location_parameter += self.coefficients_cubelist.extract("ngb_coefficient_beta").extract(constr)[0].data
         return location_parameter
 
     def _calculate_scale_parameter_from_boosting(self, current_forecast):
@@ -2000,7 +2011,9 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     self.coefficients_cubelist.extract(
                         "ngb_coefficient_gamma").extract(constr)[0].data
                     * forecast_var.data).astype(np.float32)
-        return scale_parameter
+        constr = iris.Constraint(predictor_name="intercept")
+        scale_parameter += self.coefficients_cubelist.extract("ngb_coefficient_gamma").extract(constr)[0].data
+        return np.exp(scale_parameter)**2
 
     def _calculate_location_parameter_from_mean(self, current_forecast):
         """
@@ -2137,12 +2150,14 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             template_cube.attributes,
             data=location_parameter,
         )
+
+        #units = template_cube.units if self.boosting else f"({template_cube.units})^2"
         scale_parameter_cube = create_new_diagnostic_cube(
             "scale_parameter",
             f"({template_cube.units})^2",
             template_cube,
             template_cube.attributes,
-            data=scale_parameter,
+            data=scale_parameter
         )
         return location_parameter_cube, scale_parameter_cube
 
@@ -2184,7 +2199,6 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         """
         self.coefficients_cubelist = coefficients_cubelist
         # Check coefficients_cube and forecast cube are compatible.
-
         if self.boosting:
             self._diagnostic_match(current_forecast)
             for cf in current_forecast:
