@@ -16,7 +16,6 @@ e275310547131dd8b77fd7a29ce98dbf8b857e857fc05f22eff7f1b7a1147cb1  ./apply-emos-c
 0cd25c95b4d3710c9ca21409d9143cc9249aa9ef9e3e9d0bd166fa2cd89bedd6  ./apply-emos-coefficients/realizations/realizations_coefficients.nc
 6daa96311b709c138fbeb970a348a764f439301ca8370b107fb60595f3e475d2  ./apply-emos-coefficients/realizations/realizations_kgo.nc
 cd84730b23d220223ce6fc90da667827ab799edec5913ecf64c1f21b6a65546c  ./apply-emos-coefficients/rebadged_percentiles/input.nc
-3a0bf20206de71d8b03a3a309923c57ed96101d5d5b20261a39019881c00a44d  ./apply-emos-coefficients/sites/20201212T1500Z-PT0012H00M-temperature_at_screen_level.nc
 2b0093f2bc4ca3a32c4d49d618c07426e36fa069fcd0ee927efd8ea0b7dd7c9c  ./apply-emos-coefficients/sites/each_point/coefficients.nc
 056eb41f1720841486245e26085d26fc1716c19b2b3fa71ae6230a09df051c41  ./apply-emos-coefficients/sites/each_point/kgo.nc
 4df499522060e605a75184ad9d5abf345ffdc06f8cc285e344a4c143c3ca2fbc  ./apply-emos-coefficients/sites/input.nc
