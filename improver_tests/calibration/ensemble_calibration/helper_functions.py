@@ -33,12 +33,8 @@ Functions for use within unit tests for `ensemble_calibration` plugins.
 """
 import datetime
 
-import cf_units
 import iris
 import numpy as np
-from cf_units import Unit
-from iris.coords import AuxCoord, DimCoord
-from iris.cube import Cube
 from iris.tests import IrisTest
 
 from improver.metadata.constants.attributes import MANDATORY_ATTRIBUTE_DEFAULTS
@@ -47,7 +43,6 @@ from improver.synthetic_data.set_up_test_cubes import (
     construct_scalar_time_coords,
     set_up_variable_cube,
 )
-
 from improver.utilities.warnings_handler import ManageWarnings
 
 IGNORED_MESSAGES = ["Collapsing a non-contiguous coordinate"]
