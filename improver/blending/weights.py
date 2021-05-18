@@ -338,18 +338,29 @@ class ChooseWeightsLinear(BasePlugin):
             Cube containing the output from the interpolation. This has
             the same shape as "cube", without the x and y dimensions.
         """
+        spatial_coords = [cube.coord(axis=axis) for axis in "yx"]
+        spatial_coord_dims = [cube.coord_dims(c) for c in spatial_coords]
+
         cubelist = iris.cube.CubeList([])
         for cube_slice, weight in zip(
             cube.slices_over(self.weighting_coord_name), weights
         ):
-            sub_slice = cube_slice[..., 0, 0]
+            if len(set(spatial_coord_dims)) == 1:
+                sub_slice = cube_slice[..., 0]
+            else:
+                sub_slice = cube_slice[..., 0, 0]
             sub_slice.data = np.ones(sub_slice.data.shape) * weight
             cubelist.append(sub_slice)
 
         # re-order dimension coordinates to match input cube
-        new_weights_cube = check_cube_coordinates(
-            cube[..., 0, 0], cubelist.merge_cube()
-        )
+        if len(set(spatial_coord_dims)) == 1:
+            new_weights_cube = check_cube_coordinates(
+                cube[..., 0], cubelist.merge_cube()
+            )
+        else:
+            new_weights_cube = check_cube_coordinates(
+                cube[..., 0, 0], cubelist.merge_cube()
+            )
 
         # remove all scalar coordinates that are not time-, model- or
         # blend-related
@@ -419,14 +430,18 @@ class ChooseWeightsLinear(BasePlugin):
         Returns:
             List of coordinates defining the slice to iterate over
         """
+        spatial_coords = [cube.coord(axis=axis) for axis in "yx"]
+        spatial_coord_dims = [cube.coord_dims(c) for c in spatial_coords]
+        if len(set(spatial_coord_dims)) == 1:
+            spatial_coords = [cube.coord(axis=axis) for axis in "y"]
+
         if cube.coord_dims(self.weighting_coord_name):
             slice_list = [
                 cube.coord(self.weighting_coord_name),
-                cube.coord(axis="y"),
-                cube.coord(axis="x"),
-            ]
+            ] + spatial_coords
         else:
-            slice_list = [cube.coord(axis="y"), cube.coord(axis="x")]
+            slice_list = spatial_coords
+
         return slice_list
 
     def _slice_input_cubes(self, cubes: Union[Cube, CubeList]) -> CubeList:
