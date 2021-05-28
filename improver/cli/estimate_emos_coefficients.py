@@ -33,6 +33,7 @@
 Statistics (EMOS), otherwise known as Non-homogeneous Gaussian
 Regression (NGR)."""
 
+from operator import add
 from improver import cli
 
 
@@ -45,6 +46,7 @@ def process(
     point_by_point=False,
     use_default_initial_guess=False,
     local_standardise=False,
+    land_sea_mask_name: bool = False,
     units=None,
     predictor="mean",
     tolerance: float = 0.02,
@@ -89,6 +91,10 @@ def process(
             the additive coefficients. If False, the initial guess is computed.
         local_standardise (bool):
 
+        land_sea_mask_name (str):
+            Name of the land-sea mask cube. If supplied, a land-sea mask cube
+            is expected within the list of input cubes and this land-sea mask
+            will be used to calibrate land points only.
         units (str):
             The units that calibration should be undertaken in. The historical
             forecast and truth will be converted as required.
@@ -122,7 +128,7 @@ def process(
         EstimateCoefficientsForEnsembleCalibration,
     )
 
-    forecast, truth, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute)
+    forecast, truth, additional_fields, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute, land_sea_mask_name)
 
     plugin = EstimateCoefficientsForEnsembleCalibration(
         distribution,
@@ -134,4 +140,4 @@ def process(
         tolerance=tolerance,
         max_iterations=max_iterations,
     )
-    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+    return plugin(forecast, truth, additional_fields=additional_fields, landsea_mask=land_sea_mask)

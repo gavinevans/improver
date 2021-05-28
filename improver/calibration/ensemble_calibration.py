@@ -1014,11 +1014,15 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             ).tolist()
             initial_guess = [0] + initial_beta + [0, 1]
         elif not self.use_default_initial_guess:
+            # print("truths1 = ", truths)
+            # print("forecast_predictor1 = ", forecast_predictor)
             truths_flattened = flatten_ignoring_masked_data(truths)
             if predictor.lower() == "mean":
                 forecast_predictor_flattened = flatten_ignoring_masked_data(
                     forecast_predictor
                 )
+                # print("truth = ", len(truths_flattened))
+                # print("forecast = ", len(forecast_predictor_flattened))
                 if (truths_flattened.size == 0) or (
                     forecast_predictor_flattened.size == 0
                 ):
@@ -1155,6 +1159,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self,
         historic_forecasts: Cube,
         truths: Cube,
+        additional_fields: Optional[CubeList] = None,
         landsea_mask: Optional[Cube] = None,
     ) -> CubeList:
         """
@@ -1184,6 +1189,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 Historic forecasts from the training dataset.
             truths:
                 Truths from the training dataset.
+            additional_fields:
+                Additional fields to use as supplementary predictors.
             landsea_mask:
                 The optional cube containing a land-sea mask. If provided, only
                 land points are used to calculate the coefficients. Within the

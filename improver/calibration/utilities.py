@@ -387,6 +387,7 @@ def standardise_forecast_and_truths(historic_forecasts, truths):
     forecast_sd.rename("fsig")
     std_forecast = (historic_forecasts - forecast_mean)/forecast_sd
     std_forecast.rename(historic_forecasts.name())
+    #std_forecast.data = std_forecast.data.filled(np.nan)
 
     # Use nanmean and nanstd as observations can sometimes be missing i.e. nan.
     from iris.analysis import WeightedAggregator
