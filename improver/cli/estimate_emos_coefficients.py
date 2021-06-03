@@ -46,7 +46,7 @@ def process(
     point_by_point=False,
     use_default_initial_guess=False,
     local_standardise=False,
-    land_sea_mask_name: bool = False,
+    land_sea_mask_name: str = None,
     units=None,
     predictor="mean",
     tolerance: float = 0.02,

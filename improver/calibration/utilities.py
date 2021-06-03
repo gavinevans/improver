@@ -34,12 +34,12 @@ specific for ensemble calibration.
 
 """
 import importlib
-from typing import Set, Tuple, Union
+from typing import Optional, Set, Tuple, Union
 
 import iris
 import numpy as np
 from iris.coords import DimCoord
-from iris.cube import Cube
+from iris.cube import Cube, CubeList
 from numpy import ndarray
 from numpy.ma.core import MaskedArray
 
@@ -162,8 +162,8 @@ def check_predictor(predictor: str) -> None:
 
 
 def filter_non_matching_cubes(
-    historic_forecast: Cube, truth: Cube
-) -> Tuple[Cube, Cube]:
+    historic_forecast: Cube, truth: Cube, additional_fields: Optional[CubeList] = None
+) -> Tuple[Cube, Cube, Optional[CubeList]]:
     """
     Provide filtering for the historic forecast and truth to make sure
     that these contain matching validity times. This ensures that any
@@ -176,6 +176,8 @@ def filter_non_matching_cubes(
         truth:
             Cube of truth that potentially contains a mismatch
             compared to the historic forecasts.
+        additional_fields:
+
 
     Returns:
         - Cube of historic forecasts where any mismatches with
@@ -189,6 +191,7 @@ def filter_non_matching_cubes(
     """
     matching_historic_forecasts = iris.cube.CubeList([])
     matching_truths = iris.cube.CubeList([])
+    matching_additional_fields = iris.cube.CubeList([])
     for hf_slice in historic_forecast.slices_over("time"):
         if hf_slice.coord("time").has_bounds():
             point = iris_time_to_datetime(
@@ -215,13 +218,26 @@ def filter_non_matching_cubes(
         if truth_slice:
             matching_historic_forecasts.append(hf_slice)
             matching_truths.append(truth_slice)
+
+        if additional_fields:
+            constr = iris.Constraint(coord_values=coord_values)
+            af_slices = [af_cube.extract(constr) for af_cube in additional_fields if af_cube.extract(constr) is not None]
+            if af_slices:
+                matching_additional_fields.extend(af_slices)
+
+    if additional_fields:
+        matching_additional_fields.extend([af_cube for af_cube in additional_fields if not af_cube.coords("time") ])
+
     if not matching_historic_forecasts and not matching_truths:
         msg = (
             "The filtering has found no matches in validity time "
             "between the historic forecasts and the truths."
         )
         raise ValueError(msg)
-    return (matching_historic_forecasts.merge_cube(), matching_truths.merge_cube())
+
+    matching_additional_fields = matching_additional_fields.merge() if matching_additional_fields else None
+
+    return (matching_historic_forecasts.merge_cube(), matching_truths.merge_cube(), matching_additional_fields)
 
 
 def create_unified_frt_coord(forecast_reference_time: DimCoord) -> DimCoord:
@@ -406,3 +422,51 @@ def standardise_forecast_and_truths(historic_forecasts, truths):
 
 
     return std_forecast, std_truth, forecast_mean, forecast_sd, truth_mean, truth_sd
+
+
+def standardise_forecasts(historic_forecasts, hf_coords=["realization", "time"]):
+    """Standardise the forecast by subtracting the mean and dividing
+    by the standard deviation.
+
+    Args:
+        forecast (iris.cube.Cube)
+        truth (iris.cube.Cube)
+
+    Returns:
+        Tuple:
+    """
+    # standardise ensemble members using the mean and standard deviation of the ensemble mean
+    forecast_mean = historic_forecasts.collapsed(hf_coords, iris.analysis.MEAN)
+    forecast_mean.rename("fbar")
+    forecast_sd = historic_forecasts.collapsed(hf_coords, iris.analysis.STD_DEV)
+    forecast_sd.rename("fsig")
+    std_forecast = (historic_forecasts - forecast_mean)/forecast_sd
+    std_forecast.rename(historic_forecasts.name())
+    return std_forecast,  forecast_mean, forecast_sd
+
+
+def standardise_truths(truths, truth_coords=["time"]):
+    """Standardise the truths by subtracting the mean and dividing by the
+    standard deviation.
+
+    Args:
+        truths (iris.cube.Cube)
+
+    Returns:
+        Tuple:
+    """
+    # Use nanmean and nanstd as observations can sometimes be missing i.e. nan.
+    from iris.analysis import WeightedAggregator
+    nanmean = WeightedAggregator("mean", np.nanmean)
+    nanstd = WeightedAggregator("standard_deviation", np.nanstd)
+
+    truth_mean = truths.collapsed(truth_coords, nanmean)
+    truth_mean.rename("ybar")
+
+    truth_sd = truths.collapsed(truth_coords, nanstd)
+    truth_sd.rename("ysig")
+
+    std_truth = (truths - truth_mean)/truth_sd
+    std_truth.rename(truths.name())
+    std_truth.data = std_truth.data.filled(np.nan)
+    return std_truth, truth_mean, truth_sd
