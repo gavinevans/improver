@@ -297,9 +297,10 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
         # ) = self._set_float64_precision(
         #     initial_guess, forecast_predictor.data, forecast_var.data, truth.data
         # )
-        initial_guess = np.array(initial_guess, dtype=np.float64),
-        truth.data = truth.data.astype(np.float64),
-        sqrt_pi = np.sqrt(np.pi).astype(np.float64),
+
+        initial_guess = np.array(initial_guess, dtype=np.float64)
+        truth.data = truth.data.astype(np.float64)
+        sqrt_pi = np.sqrt(np.pi).astype(np.float64)
         for forecast_predictor in forecast_predictors:
             forecast_predictor.data.astype(np.float64)
         forecast_var.data = forecast_var.data.astype(np.float64)
@@ -315,15 +316,23 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
         optimised_coeffs = []
         for index, (truth_slice, fv_slice) in enumerate(zip(truth.slices_over(sindex), forecast_var.slices_over(sindex))):
             constr = iris.Constraint(
-                coord_values={y_name: lambda cell: np.isclose(cell),
-                              x_name: lambda cell: np.isclose(cell)})
-            fp_slice_data = np.stack([fp_cube.extract(constr).data for fp_cube in forecast_predictors])
+                coord_values={y_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="y").points)),
+                              x_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="x").points))})
+            new_fp_data = []
+            for fp_cube in forecast_predictors:
+                extracted_cube = fp_cube.extract(constr)
+                if not fp_cube.coords("time"):
+                    multitime_fp_data = np.broadcast_to(extracted_cube.data, (len(truth_slice.coord("time").points),)+extracted_cube.shape)
+                    new_fp_data.append(multitime_fp_data)
+                else:
+                    new_fp_data.append(extracted_cube.data)
+            new_fp_data = np.stack(new_fp_data)
 
             optimised_coeffs.append(
                 self._minimise_caller(
                     minimisation_function,
                     initial_guess[index],
-                    fp_slice_data.T,
+                    new_fp_data.T,
                     truth_slice.data,
                     fv_slice.data,
                     sqrt_pi,
@@ -926,7 +935,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 template_cube,
                 generate_mandatory_attributes([historic_forecasts]),
                 optional_attributes=self._set_attributes(historic_forecasts),
-                data=np.atleast_1d(optimised_coeff) if "beta" == coeff_name else np.array(optimised_coeff),
+                data=np.reshape(optimised_coeff, template_cube.shape) if "beta" == coeff_name else np.array(optimised_coeff),
             )
             cubelist.append(cube)
         return cubelist
@@ -1039,7 +1048,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         )
 
         if predictor.lower() == "mean" and default_initial_guess:
-            initial_guess = [0, 1, 0, 1]
+            initial_beta = np.repeat(1.0/forecast_predictor.shape[0], forecast_predictor.shape[0]).tolist()
+            initial_guess = [0] + initial_beta + [0, 1]
         elif predictor.lower() == "realizations" and (
             default_initial_guess or not statsmodels_available()
         ):
@@ -1048,15 +1058,13 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             ).tolist()
             initial_guess = [0] + initial_beta + [0, 1]
         elif not self.use_default_initial_guess:
-            # print("truths1 = ", truths)
-            # print("forecast_predictor1 = ", forecast_predictor)
             truths_flattened = flatten_ignoring_masked_data(truths)
             if predictor.lower() == "mean":
                 import statsmodels.api as sm
                 forecast_predictor_flattened = flatten_ignoring_masked_data(
                     forecast_predictor, preserve_leading_dimension=True
                 )
-                val = sm.add_constant(forecast_predictor_flattened.T)
+                val = sm.add_constant(forecast_predictor_flattened.T, has_constant="add")
                 est = sm.OLS(truths_flattened, val).fit()
                 intercept = est.params[0]
                 gradient = est.params[1:]
@@ -1147,11 +1155,19 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 constr = iris.Constraint(
                     coord_values={y_name: lambda cell: any(np.isclose(cell.point, truths_slice.coord(axis="y").points)),
                                   x_name: lambda cell: any(np.isclose(cell.point, truths_slice.coord(axis="x").points))})
-                fp_slice_data = np.stack([fp_cube.extract(constr).data for fp_cube in forecast_predictors])
+                new_fp_data = []
+                for fp_cube in forecast_predictors:
+                    extracted_cube = fp_cube.extract(constr)
+                    if not fp_cube.coords("time"):
+                        multitime_fp_data = np.broadcast_to(extracted_cube.data, (len(truths.coord("time").points),)+extracted_cube.shape)
+                        new_fp_data.append(multitime_fp_data)
+                    else:
+                        new_fp_data.append(extracted_cube.data)
+                new_fp_data = np.stack(new_fp_data)
                 initial_guess.append(
                     self.compute_initial_guess(
                         truths_slice.data,
-                        fp_slice_data,
+                        new_fp_data,
                         self.predictor,
                         number_of_realizations,
                     )
