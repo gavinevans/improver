@@ -49,7 +49,7 @@ from iris.exceptions import CoordinateNotFoundError
 from numpy import ndarray
 from scipy import stats
 from scipy.optimize import minimize
-from scipy.stats import norm
+from scipy.stats import genlogistic, norm
 
 from improver import BasePlugin, PostProcessingPlugin
 from improver.calibration.utilities import (
@@ -145,6 +145,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
         # depending upon the distribution requested. The names of these
         # distributions match the names of distributions in scipy.stats.
         self.minimisation_dict = {
+            "genlogistic": self.calculate_genlogistic_ls,
             "norm": self.calculate_normal_crps,
             "truncnorm": self.calculate_truncated_normal_crps,
         }
@@ -315,9 +316,12 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
 
         optimised_coeffs = []
         for index, (truth_slice, fv_slice) in enumerate(zip(truth.slices_over(sindex), forecast_var.slices_over(sindex))):
-            constr = iris.Constraint(
-                coord_values={y_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="y").points)),
-                              x_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="x").points))})
+            if truth_slice.coords("wmo_id"):
+                constr = iris.Constraint(wmo_id=truth_slice.coord("wmo_id").points)
+            else:
+                constr = iris.Constraint(
+                    coord_values={y_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="y").points)),
+                                x_name: lambda cell: any(np.isclose(cell.point, truth_slice.coord(axis="x").points))})
             new_fp_data = []
             for fp_cube in forecast_predictors:
                 extracted_cube = fp_cube.extract(constr)
@@ -328,17 +332,20 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
                     new_fp_data.append(extracted_cube.data)
             new_fp_data = np.stack(new_fp_data)
 
-            optimised_coeffs.append(
-                self._minimise_caller(
-                    minimisation_function,
-                    initial_guess[index],
-                    new_fp_data.T,
-                    truth_slice.data,
-                    fv_slice.data,
-                    sqrt_pi,
-                    predictor,
-                ).x.astype(np.float32)
-            )
+            if all(np.isnan(truth_slice.data)):
+                optimised_coeffs.append(np.array(initial_guess[index], dtype=np.float32))
+            else:
+                optimised_coeffs.append(
+                    self._minimise_caller(
+                        minimisation_function,
+                        initial_guess[index],
+                        new_fp_data.T,
+                        truth_slice.data,
+                        fv_slice.data,
+                        sqrt_pi,
+                        predictor,
+                    ).x.astype(np.float32)
+                )
         y_coord = forecast_predictor.coord(axis="y")
         x_coord = forecast_predictor.coord(axis="x")
 
@@ -418,7 +425,6 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
             sqrt_pi,
             predictor,
         )
-
         if not optimised_coeffs.success:
             msg = (
                 "Minimisation did not result in convergence after "
@@ -516,6 +522,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
                 forecast_var,
                 predictor,
             )
+
         return optimised_coeffs
 
     def calculate_normal_crps(
@@ -668,6 +675,60 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
             result = self.BAD_VALUE
         return result
 
+    def calculate_genlogistic_ls(
+            self, initial_guess, forecast_predictor, truth, forecast_var, sqrt_pi,
+            predictor):
+        """
+        Calculate the log score for a generalised Logistic distribution.
+
+        Args:
+            initial_guess (list):
+                List of optimised coefficients.
+                Order of coefficients is [alpha, beta, gamma, delta, shape].
+            forecast_predictor (numpy.ndarray):
+                Data to be used as the predictor,
+                either the ensemble mean or the ensemble realizations.
+            truth (numpy.ndarray):
+                Data to be used as truth.
+            forecast_var (numpy.ndarray):
+                Ensemble variance data.
+            predictor_of_mean_flag (str):
+                String to specify the input to calculate the calibrated mean.
+                Currently the ensemble mean ("mean") and the ensemble
+                realizations ("realizations") are supported as the predictors.
+
+        Returns:
+            result (float):
+                Log score for the current set of coefficients.
+
+        """
+        if predictor.lower() == "mean":
+            a, b, gamma, delta, shape = initial_guess
+            mu = (forecast_predictor * b) + a
+
+        elif predictor.lower() == "realizations":
+            a, b, gamma, delta, shape = (
+                initial_guess[0],
+                initial_guess[1:-3] ** 2,
+                initial_guess[-3],
+                initial_guess[-2],
+                initial_guess[-1],
+            )
+            a_b = np.array([a] + b.tolist(), dtype=np.float64)
+
+            new_col = np.ones(truth.shape, dtype=np.float32)
+            all_data = np.column_stack((new_col, forecast_predictor))
+            mu = np.dot(all_data, a_b)
+
+        sigma = np.sqrt(
+            gamma**2 + delta**2 * forecast_var)
+        #print("mu = ", mu, "sigma = ", sigma, "shape = ", shape)
+        result = np.nanmean(-np.log(genlogistic.pdf(truth, c=shape, loc=mu, scale=sigma)))
+
+        if not np.isfinite(np.min(mu/sigma)):
+            result = self.BAD_VALUE
+        return result
+
 
 class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
     """
@@ -761,6 +822,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
 
         # Setting default values for coeff_names.
         self.coeff_names = ["alpha", "beta", "gamma", "delta"]
+        if self.distribution == "genlogistic":
+            self.coeff_names.append("shape")
 
     def _validate_distribution(self) -> None:
         """Validate that the distribution supplied has a corresponding method
@@ -931,8 +994,9 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             if coeff_name in ["alpha", "gamma"]:
                 coeff_units = historic_forecasts.units
 
+            long_name = "shape_parameters" if coeff_name == "shape" else f"emos_coefficient_{coeff_name}"
             cube = create_new_diagnostic_cube(
-                f"emos_coefficient_{coeff_name}",
+                long_name,
                 coeff_units,
                 template_cube,
                 generate_mandatory_attributes([historic_forecasts]),
@@ -1083,6 +1147,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 gradient = est.params[1:]
                 initial_guess = [intercept] + gradient.tolist() + [0, 1]
 
+        if "shape" in self.coeff_names:
+           initial_guess.append(1)
         return np.array(initial_guess, dtype=np.float32)
 
     @staticmethod
@@ -1932,13 +1998,16 @@ class ApplyEMOS(PostProcessingPlugin):
             coefficients, standardise_cubelist=standardisers, landsea_mask=land_sea_mask
         )
 
+        if [c for c in coefficients if c.name() == "shape_parameters"]:
+            shape = coefficients.extract_strict("shape_parameters")
+        else:
+            shape = self._get_attribute(coefficients, "shape_parameters", optional=True)
+
         self.distribution = {
             "name": self._get_attribute(coefficients, "distribution"),
             "location": location_parameter,
             "scale": scale_parameter,
-            "shape": self._get_attribute(
-                coefficients, "shape_parameters", optional=True
-            ),
+            "shape": shape,
         }
 
         result = self._calibrate_forecast(forecast, randomise, random_seed)
