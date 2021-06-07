@@ -46,6 +46,7 @@ def process(
     point_by_point=False,
     use_default_initial_guess=False,
     local_standardise=False,
+    global_standardise=False,
     land_sea_mask_name: str = None,
     units=None,
     predictor="mean",
@@ -91,6 +92,8 @@ def process(
             the additive coefficients. If False, the initial guess is computed.
         local_standardise (bool):
 
+        global_standardise (bool):
+
         land_sea_mask_name (str):
             Name of the land-sea mask cube. If supplied, a land-sea mask cube
             is expected within the list of input cubes and this land-sea mask
@@ -135,6 +138,7 @@ def process(
         point_by_point=point_by_point,
         use_default_initial_guess=use_default_initial_guess,
         local_standardise=local_standardise,
+        global_standardise=global_standardise,
         desired_units=units,
         predictor=predictor,
         tolerance=tolerance,

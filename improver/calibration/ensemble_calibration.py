@@ -681,6 +681,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         point_by_point: bool = False,
         use_default_initial_guess: bool = False,
         local_standardise: bool = False,
+        global_standardise: bool = False,
         desired_units: Optional[Union[str, Unit]] = None,
         predictor: str = "mean",
         tolerance: float = 0.02,
@@ -744,6 +745,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self.point_by_point = point_by_point
         self.use_default_initial_guess = use_default_initial_guess
         self.local_standardise = local_standardise
+        self.global_standardise = global_standardise
         self._validate_distribution()
         self.desired_units = desired_units
         # Ensure predictor is valid.
@@ -1303,10 +1305,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             raise ValueError(msg)
 
         coefficients_cubelist = iris.cube.CubeList()
-        if self.local_standardise:
+        if self.local_standardise or self.global_standardise:
             # TODO: Extend local standardisation to handle additional fields.
-            historic_forecasts, hf_mean, hf_sd = standardise_forecasts(historic_forecasts)
-            truths, tr_mean, tr_sd = standardise_truths(truths)
+            historic_forecasts, hf_mean, hf_sd = standardise_forecasts(
+                historic_forecasts, hf_coords=historic_forecasts.coords(dim_coords=True))
+            truths, tr_mean, tr_sd = standardise_truths(
+                truths, truths.coords(dim_coords=True))
             # historic_forecasts, truths, hf_mean, hf_sd, tr_mean, tr_sd = standardise_forecast_and_truths(
             #     historic_forecasts, truths)
             # Note that these are not coefficients.
@@ -1456,6 +1460,11 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                 forecast_predictors.append(collapsed(af, "realization", iris.analysis.MEAN))
             else:
                 forecast_predictors.append(af)
+
+        if len(forecast_predictors) != len(self.coefficients_cubelist.extract_strict("emos_coefficient_beta").coord("predictor_index").points):
+            msg = ("The number of forecast predictors must equal the number of "
+                   "beta coefficients in order to create a calibrated forecast.")
+            raise ValueError(msg)
 
         if self.standardise_cubelist:
             constr = iris.AttributeConstraint(diagnostic_standard_name=self.coefficients_cubelist[0].attributes["diagnostic_standard_name"])
