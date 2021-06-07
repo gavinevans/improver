@@ -30,10 +30,11 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """init for calibration"""
 
-from collections import OrderedDict
 from typing import List, Optional, Tuple
 
 from iris.cube import Cube, CubeList
+import numpy as np
+import scipy
 
 from improver.metadata.probabilistic import (
     get_diagnostic_cube_name_from_probability_name,
@@ -113,10 +114,57 @@ def split_forecasts_and_truth(
     if missing_inputs:
         raise IOError(f"Missing {missing_inputs} input.")
 
-    truth = MergeCubes()(cubes_dict["truth"][diag_name])
+    truth = MergeCubes()(filter_obs(cubes_dict["truth"][diag_name]))
     forecast = MergeCubes()(cubes_dict["historic_forecasts"])
     additional_fields = CubeList([MergeCubes()(cubes_dict["additional_fields"][k]) for k in cubes_dict["additional_fields"]])
     return forecast, truth, additional_fields, cubes_dict["land_sea_mask"]
+
+
+def filter_obs(spot_truths_cubelist: CubeList) -> CubeList:
+    """Deal with observation sites that failed to provide an altitude, latitude
+    and longitude. As we've ensured that each observation site has an entry
+    for each timestep, even if no observation was available at that timestep,
+    some observations will not have an altitude, latitudes or longitudes.
+    There is also the potential for some sites to report different altitudes,
+    latitudes and longitudes at different times. For simplicity, the altitude,
+    latitude and longitude from the first timestep is used as the altitude,
+    latitude and longitude throughout the input CubeList.
+
+    Args:
+        spot_truths_cubelist:
+            Cubelist of spot truths
+
+    Returns:
+        CubeList of spot truths with consistent values for the altitude,
+        latitude and longitude at each timestep.
+    """
+    altitudes = np.squeeze(
+        scipy.stats.mode(
+            np.stack([c.coord("altitude").points for c in spot_truths_cubelist]), axis=0
+        )[0]
+    )
+    latitudes = np.squeeze(
+        scipy.stats.mode(
+            np.stack([c.coord(axis="y").points for c in spot_truths_cubelist]), axis=0
+        )[0]
+    )
+    longitudes = np.squeeze(
+        scipy.stats.mode(
+            np.stack([c.coord(axis="x").points for c in spot_truths_cubelist]), axis=0
+        )[0]
+    )
+
+    altitudes = np.nan_to_num(altitudes)
+    latitudes = np.nan_to_num(latitudes)
+    longitudes = np.nan_to_num(longitudes)
+
+    for index, _ in enumerate(spot_truths_cubelist):
+
+        spot_truths_cubelist[index].coord("altitude").points = altitudes
+        spot_truths_cubelist[index].coord(axis="y").points = latitudes
+        spot_truths_cubelist[index].coord(axis="x").points = longitudes
+
+    return spot_truths_cubelist
 
 
 def split_forecasts_and_coeffs(
