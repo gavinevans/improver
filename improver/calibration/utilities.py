@@ -221,12 +221,18 @@ def filter_non_matching_cubes(
 
         if additional_fields:
             constr = iris.Constraint(coord_values=coord_values)
-            af_slices = [af_cube.extract(constr) for af_cube in additional_fields if af_cube.extract(constr) is not None]
+            af_slices = [
+                af_cube.extract(constr)
+                for af_cube in additional_fields
+                if af_cube.extract(constr) is not None
+            ]
             if af_slices:
                 matching_additional_fields.extend(af_slices)
 
     if additional_fields:
-        matching_additional_fields.extend([af_cube for af_cube in additional_fields if not af_cube.coords("time") ])
+        matching_additional_fields.extend(
+            [af_cube for af_cube in additional_fields if not af_cube.coords("time")]
+        )
 
     if not matching_historic_forecasts and not matching_truths:
         msg = (
@@ -235,9 +241,15 @@ def filter_non_matching_cubes(
         )
         raise ValueError(msg)
 
-    matching_additional_fields = matching_additional_fields.merge() if matching_additional_fields else None
+    matching_additional_fields = (
+        matching_additional_fields.merge() if matching_additional_fields else None
+    )
 
-    return (matching_historic_forecasts.merge_cube(), matching_truths.merge_cube(), matching_additional_fields)
+    return (
+        matching_historic_forecasts.merge_cube(),
+        matching_truths.merge_cube(),
+        matching_additional_fields,
+    )
 
 
 def create_unified_frt_coord(forecast_reference_time: DimCoord) -> DimCoord:
@@ -315,7 +327,10 @@ def forecast_coords_match(first_cube: Cube, second_cube: Cube) -> None:
         ValueError: The two cubes are not equivalent.
     """
     mismatches = []
-    if first_cube.coord("forecast_period").points != second_cube.coord("forecast_period").points:
+    if (
+        first_cube.coord("forecast_period").points
+        != second_cube.coord("forecast_period").points
+    ):
         mismatches.append("forecast_period")
 
     if get_frt_hours(first_cube.coord("forecast_reference_time")) != get_frt_hours(
@@ -382,7 +397,9 @@ def statsmodels_available() -> bool:
     return False
 
 
-def standardise_forecast_and_truths(historic_forecasts, truths, global_standardise=False):
+def standardise_forecast_and_truths(
+    historic_forecasts, truths, global_standardise=False
+):
     """Standardise the forecast and truths by subtracting the mean and dividing
     by the standard deviation.
 
@@ -408,21 +425,37 @@ def standardise_forecast_and_truths(historic_forecasts, truths, global_standardi
 
     # Use nanmean and nanstd as observations can sometimes be missing i.e. nan.
     from iris.analysis import WeightedAggregator
+
     nanmean = WeightedAggregator("mean", np.nanmean)
     nanstd = WeightedAggregator("standard_deviation", np.nanstd)
 
-    truth_mean = truths.collapsed(truth_coords, nanmean)
+    if truths.coords("time", dim_coords=True):
+        truth_mean = truths.collapsed(truth_coords, nanmean)
+    else:
+        truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
     truth_mean.rename("ybar")
 
-    truth_sd = truths.collapsed(truth_coords, nanstd)
+    if truths.coords("time", dim_coords=True):
+        truth_sd = truths.collapsed(truth_coords, nanstd)
+    else:
+        truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
     truth_sd.rename("ysig")
 
-    std_truth = (truths - truth_mean)/truth_sd
+    std_truth = (truths - truth_mean) / truth_sd
     std_truth.rename(truths.name())
-    std_truth.data = std_truth.data.filled(np.nan)
 
-    std_forecast = (historic_forecasts - forecast_mean)/forecast_sd
+    std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
     std_forecast.rename(historic_forecasts.name())
+
+    # Ensure that masked values in the truth created by the standardisation
+    # are also masked in the forecast.
+    (rdim,) = std_forecast.coord_dims("realization")
+    expanded_truth = np.repeat(
+        np.expand_dims(std_truth.data.mask, axis=rdim),
+        len(std_forecast.coord("realization").points),
+        axis=rdim,
+    )
+    std_forecast.data = np.ma.masked_where(expanded_truth, std_forecast.data)
     return std_forecast, std_truth, forecast_mean, forecast_sd, truth_mean, truth_sd
 
 
@@ -442,9 +475,9 @@ def standardise_forecasts(historic_forecasts, hf_coords=["realization", "time"])
     forecast_mean.rename("fbar")
     forecast_sd = historic_forecasts.collapsed(hf_coords, iris.analysis.STD_DEV)
     forecast_sd.rename("fsig")
-    std_forecast = (historic_forecasts - forecast_mean)/forecast_sd
+    std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
     std_forecast.rename(historic_forecasts.name())
-    return std_forecast,  forecast_mean, forecast_sd
+    return std_forecast, forecast_mean, forecast_sd
 
 
 def standardise_truths(truths, truth_coords=["time"]):
@@ -459,6 +492,7 @@ def standardise_truths(truths, truth_coords=["time"]):
     """
     # Use nanmean and nanstd as observations can sometimes be missing i.e. nan.
     from iris.analysis import WeightedAggregator
+
     nanmean = WeightedAggregator("mean", np.nanmean)
     nanstd = WeightedAggregator("standard_deviation", np.nanstd)
 
@@ -468,7 +502,7 @@ def standardise_truths(truths, truth_coords=["time"]):
     truth_sd = truths.collapsed(truth_coords, nanstd)
     truth_sd.rename("ysig")
 
-    std_truth = (truths - truth_mean)/truth_sd
+    std_truth = (truths - truth_mean) / truth_sd
     std_truth.rename(truths.name())
     std_truth.data = std_truth.data.filled(np.nan)
     return std_truth, truth_mean, truth_sd

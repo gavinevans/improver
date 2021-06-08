@@ -1373,12 +1373,12 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         coefficients_cubelist = iris.cube.CubeList()
         if self.local_standardise or self.global_standardise:
             # TODO: Extend local standardisation to handle additional fields.
-            historic_forecasts, hf_mean, hf_sd = standardise_forecasts(
-                historic_forecasts, hf_coords=historic_forecasts.coords(dim_coords=True))
-            truths, tr_mean, tr_sd = standardise_truths(
-                truths, truths.coords(dim_coords=True))
-            # historic_forecasts, truths, hf_mean, hf_sd, tr_mean, tr_sd = standardise_forecast_and_truths(
-            #     historic_forecasts, truths)
+            # historic_forecasts, hf_mean, hf_sd = standardise_forecasts(
+            #     historic_forecasts, hf_coords=historic_forecasts.coords(dim_coords=True))
+            # truths, tr_mean, tr_sd = standardise_truths(
+            #     truths, truths.coords(dim_coords=True))
+            historic_forecasts, truths, hf_mean, hf_sd, tr_mean, tr_sd = standardise_forecast_and_truths(
+                historic_forecasts, truths)
             # Note that these are not coefficients.
             coefficients_cubelist.extend(iris.cube.CubeList([hf_mean, hf_sd, tr_mean, tr_sd]))
 
