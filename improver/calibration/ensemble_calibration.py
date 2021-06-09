@@ -703,8 +703,17 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
 
         """
         if predictor.lower() == "mean":
-            a, b, gamma, delta, shape = initial_guess
-            mu = (forecast_predictor * b) + a
+            aa, bb, gamma, delta, shape = (
+                initial_guess[0],
+                initial_guess[1:-3],
+                initial_guess[-3],
+                initial_guess[-2],
+                initial_guess[-1],
+            )
+            a_b = np.array([aa, *np.atleast_1d(bb)], dtype=np.float64)
+            new_col = np.ones(truth.shape, dtype=np.float32)
+            all_data = np.column_stack((new_col, forecast_predictor))
+            mu = np.dot(all_data, a_b)
 
         elif predictor.lower() == "realizations":
             a, b, gamma, delta, shape = (
@@ -1034,12 +1043,21 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 does not match the expected number.
         """
         if self.predictor.lower() == "realizations" or len(forecast_predictors) > 1:
-            optimised_coeffs = [
-                optimised_coeffs[0],
-                optimised_coeffs[1:-2],
-                optimised_coeffs[-2],
-                optimised_coeffs[-1],
-            ]
+            if self.distribution == "genlogistic":
+                optimised_coeffs = [
+                    optimised_coeffs[0],
+                    optimised_coeffs[1:-3],
+                    optimised_coeffs[-3],
+                    optimised_coeffs[-2],
+                    optimised_coeffs[-1],
+                ]
+            else:
+                optimised_coeffs = [
+                    optimised_coeffs[0],
+                    optimised_coeffs[1:-2],
+                    optimised_coeffs[-2],
+                    optimised_coeffs[-1],
+                ]
 
         if len(optimised_coeffs) != len(self.coeff_names):
             msg = (
@@ -1266,7 +1284,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                         len(initial_guess),
                     ),
                 )
-
         # Calculate coefficients if there are no nans in the initial guess.
         optimised_coeffs = self.minimiser(
             initial_guess,
@@ -1417,7 +1434,6 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             forecast_var,
             number_of_realizations,
         )
-
         return coefficients_cubelist
 
 
