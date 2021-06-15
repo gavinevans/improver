@@ -1427,13 +1427,13 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             self.mask_cube(forecast_var, landsea_mask)
             self.mask_cube(truths, landsea_mask)
 
-        coefficients_cubelist = self.guess_and_minimise(
+        coefficients_cubelist.extend(self.guess_and_minimise(
             truths,
             historic_forecasts,
             forecast_predictors,
             forecast_var,
             number_of_realizations,
-        )
+        ))
         return coefficients_cubelist
 
 
@@ -1635,20 +1635,24 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             "realization", iris.analysis.VARIANCE
         )
 
-        scale_factor = 1
-        if self.standardise_cubelist:
-            scale_factor = self.standardise_cubelist.extract_strict("ysig").data**2 / self.standardise_cubelist.extract_strict("fsig").data**2
-
         # Calculating the scale parameter, based on the raw variance S^2,
         # where predicted variance = c + dS^2, where c = (gamma)^2 and
         # d = (delta)^2
-        scale_parameter = (
-            self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data
-            ** 2
-            + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data
-            ** 2
-            * forecast_var.data*scale_factor
-        ).astype(np.float32)
+        if self.standardise_cubelist:
+            scale_parameter = (
+                (self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data**2
+                + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data**2
+                * forecast_var.data/self.standardise_cubelist.extract_strict("fsig").data**2) *
+                self.standardise_cubelist.extract_strict("ysig").data**2
+            ).astype(np.float32)
+        else:
+            scale_parameter = (
+                self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data
+                ** 2
+                + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data
+                ** 2
+                * forecast_var.data
+            ).astype(np.float32)
         return scale_parameter
 
     def _create_output_cubes(
