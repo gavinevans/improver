@@ -46,6 +46,7 @@ def process(
     point_by_point=False,
     use_default_initial_guess=False,
     local_standardise=False,
+    local_standardise_using_forecast=False,
     global_standardise=False,
     land_sea_mask_name: str = None,
     units=None,
@@ -91,6 +92,8 @@ def process(
             coefficients of 1 for the multiplicative coefficients and 0 for
             the additive coefficients. If False, the initial guess is computed.
         local_standardise (bool):
+
+        local_standardise_using_forecast (bool):
 
         global_standardise (bool):
 
@@ -138,6 +141,7 @@ def process(
         point_by_point=point_by_point,
         use_default_initial_guess=use_default_initial_guess,
         local_standardise=local_standardise,
+        local_standardise_using_forecast=local_standardise_using_forecast,
         global_standardise=global_standardise,
         desired_units=units,
         predictor=predictor,

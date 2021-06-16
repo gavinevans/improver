@@ -58,6 +58,9 @@ def process(
     ignore_ecc_bounds=False,
     predictor="mean",
     land_sea_mask_name: str = None,
+    local_standardise=False,
+    global_standardise=False,
+    local_standardise_using_forecasts=False,
 ):
     """Applying coefficients for Ensemble Model Output Statistics.
 

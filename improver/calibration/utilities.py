@@ -398,7 +398,7 @@ def statsmodels_available() -> bool:
 
 
 def standardise_forecast_and_truths(
-    historic_forecasts, truths, global_standardise=False
+    historic_forecasts, truths, global_standardise=False, using_forecasts=False
 ):
     """Standardise the forecast and truths by subtracting the mean and dividing
     by the standard deviation.
@@ -406,6 +406,10 @@ def standardise_forecast_and_truths(
     Args:
         forecast (iris.cube.Cube)
         truth (iris.cube.Cube)
+        global_standardise
+        using_forecasts
+            Standardise the truths using the forecast mean and
+            standard deviation
 
     Returns:
         Tuple:
@@ -429,32 +433,36 @@ def standardise_forecast_and_truths(
     nanmean = WeightedAggregator("mean", np.nanmean)
     nanstd = WeightedAggregator("standard_deviation", np.nanstd)
 
-    if not truths.coords("time", dim_coords=True):
-        # Handle a training dataset with a single timestep.
-        msg = ("The truths cube provided does not have a time dimension. "
-               "Multiple times are required to collapse over the time dimension "
-               "to calculate the climatological mean or standard deviation.")
-        raise ValueError(msg)
-        #truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
-        #truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
+    if using_forecasts:
+        std_truth = (truths - forecast_mean) / forecast_sd
+        std_truth.rename(truths.name())
+    else:
+        if not truths.coords("time", dim_coords=True):
+            # Handle a training dataset with a single timestep.
+            msg = ("The truths cube provided does not have a time dimension. "
+                "Multiple times are required to collapse over the time dimension "
+                "to calculate the climatological mean or standard deviation.")
+            raise ValueError(msg)
+            #truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
+            #truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
 
-    truth_mean = truths.collapsed(truth_coords, nanmean)
-    truth_mean.rename("ybar")
+        truth_mean = truths.collapsed(truth_coords, nanmean)
+        truth_mean.rename("ybar")
 
-    truth_sd = truths.collapsed(truth_coords, nanstd)
-    truth_sd.rename("ysig")
+        truth_sd = truths.collapsed(truth_coords, nanstd)
+        truth_sd.rename("ysig")
 
-    std_truth = (truths - truth_mean) / truth_sd
-    std_truth.rename(truths.name())
+        std_truth = (truths - truth_mean) / truth_sd
+        std_truth.rename(truths.name())
+
+        if np.any(np.isclose(truth_sd, 0)):
+            msg = ("Standardised truths cannot be calculated if the truth "
+                "standard deviation is zero. Increasing the training dataset "
+                "length may solve this issue.")
+            raise ValueError(msg)
 
     std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
     std_forecast.rename(historic_forecasts.name())
-
-    if np.any(np.isclose(truth_sd, 0)):
-        msg = ("Standardised truths cannot be calculated if the truth "
-               "standard deviation is zero. Increasing the training dataset "
-               "length may solve this issue.")
-        raise ValueError(msg)
 
     # # Ensure that masked values in the truth created by the standardisation
     # # are also masked in the forecast.

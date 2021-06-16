@@ -751,6 +751,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         point_by_point: bool = False,
         use_default_initial_guess: bool = False,
         local_standardise: bool = False,
+        local_standardise_using_forecasts: bool = False,
         global_standardise: bool = False,
         desired_units: Optional[Union[str, Unit]] = None,
         predictor: str = "mean",
@@ -784,6 +785,8 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 coefficients and 0 for the additive coefficients. If False,
                 the initial guess is computed.
             local_standardise:
+            local_standardise_using_forecasts:
+            global_standardise:
             desired_units:
                 The unit that you would like the calibration to be undertaken
                 in. The current forecast, historical forecast and truth will be
@@ -815,6 +818,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         self.point_by_point = point_by_point
         self.use_default_initial_guess = use_default_initial_guess
         self.local_standardise = local_standardise
+        self.local_standardise_using_forecasts = local_standardise_using_forecasts
         self.global_standardise = global_standardise
         self._validate_distribution()
         self.desired_units = desired_units
@@ -1388,14 +1392,15 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             raise ValueError(msg)
 
         coefficients_cubelist = iris.cube.CubeList()
-        if self.local_standardise or self.global_standardise:
+        if any(self.local_standardise, self.local_standardise_using_forecasts, self.global_standardise):
             # TODO: Extend local standardisation to handle additional fields.
             # historic_forecasts, hf_mean, hf_sd = standardise_forecasts(
             #     historic_forecasts, hf_coords=historic_forecasts.coords(dim_coords=True))
             # truths, tr_mean, tr_sd = standardise_truths(
             #     truths, truths.coords(dim_coords=True))
             historic_forecasts, truths, hf_mean, hf_sd, tr_mean, tr_sd = standardise_forecast_and_truths(
-                historic_forecasts, truths)
+                historic_forecasts, truths, global_standardise=self.global_standardise,
+                using_forecasts=self.local_standardise_using_forecasts)
             # Note that these are not coefficients.
             coefficients_cubelist.extend(iris.cube.CubeList([hf_mean, hf_sd, tr_mean, tr_sd]))
 
@@ -1443,7 +1448,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
     uncalibrated input forecast and EMOS coefficients.
     """
 
-    def __init__(self, predictor: str = "mean") -> None:
+    def __init__(self, predictor: str = "mean", unstandardise_using_forecasts=False) -> None:
         """
         Create a plugin that uses the coefficients created using EMOS from
         historical forecasts and corresponding truths and applies these
@@ -1459,6 +1464,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         """
         check_predictor(predictor)
         self.predictor = predictor
+        self.unstandardise_using_forecasts = unstandardise_using_forecasts
 
         self.coefficients_cubelist = None
         self.current_forecast = None
@@ -1569,7 +1575,10 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         location_parameter = location_parameter.astype(np.float32)
 
         if self.standardise_cubelist:
-            location_parameter = (location_parameter*self.standardise_cubelist.extract_strict("ysig").data) + self.standardise_cubelist.extract_strict("ybar").data
+            if self.unstandardise_using_forecasts:
+                location_parameter = (location_parameter*self.standardise_cubelist.extract_strict("fsig").data) + self.standardise_cubelist.extract_strict("fbar").data
+            else:
+                location_parameter = (location_parameter*self.standardise_cubelist.extract_strict("ysig").data) + self.standardise_cubelist.extract_strict("ybar").data
             index = np.isnan(location_parameter)
             location_parameter[index] = forecast_predictor_orig.data[index]
 
@@ -1639,12 +1648,20 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         # where predicted variance = c + dS^2, where c = (gamma)^2 and
         # d = (delta)^2
         if self.standardise_cubelist:
-            scale_parameter = (
-                (self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data**2
-                + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data**2
-                * forecast_var.data/self.standardise_cubelist.extract_strict("fsig").data**2) *
-                self.standardise_cubelist.extract_strict("ysig").data**2
-            ).astype(np.float32)
+            if self.unstandardise_using_forecasts:
+                scale_parameter = (
+                    (self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data**2
+                    + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data**2
+                    * forecast_var.data/self.standardise_cubelist.extract_strict("fsig").data**2) *
+                    self.standardise_cubelist.extract_strict("fsig").data**2
+                ).astype(np.float32)
+            else:
+                scale_parameter = (
+                    (self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data**2
+                    + self.coefficients_cubelist.extract_strict("emos_coefficient_delta").data**2
+                    * forecast_var.data/self.standardise_cubelist.extract_strict("fsig").data**2) *
+                    self.standardise_cubelist.extract_strict("ysig").data**2
+                ).astype(np.float32)
         else:
             scale_parameter = (
                 self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data
@@ -1955,6 +1972,9 @@ class ApplyEMOS(PostProcessingPlugin):
         predictor: str = "mean",
         randomise: bool = False,
         random_seed: Optional[int] = None,
+        local_standardise: bool = False,
+        local_standardise_using_forecasts: bool = False,
+        global_standardise: bool = False
     ) -> Cube:
         """Calibrate input forecast using pre-calculated coefficients
 
@@ -1995,6 +2015,15 @@ class ApplyEMOS(PostProcessingPlugin):
         standardisers = iris.cube.CubeList([c for c in coefficients if c.name() not in allowed_coeff_names])
         coefficients = iris.cube.CubeList([c for c in coefficients if c.name() in allowed_coeff_names])
 
+        if (any(local_standardise, local_standardise_using_forecasts, global_standardise)
+                and not standardisers):
+            msg = ("Unstandardisation is requested but the mean and standard "
+                   "deviation are not available.")
+            ValueError(msg)
+        elif (not (local_standardise, local_standardise_using_forecasts, global_standardise) and standardisers):
+            msg = ("No unstandardisation is requested but the mean and "
+                   "standard deviation to unstandardise is available.")
+
         self.forecast_type = self._get_forecast_type(forecast)
 
         forecast_as_realizations = forecast.copy()
@@ -2011,7 +2040,7 @@ class ApplyEMOS(PostProcessingPlugin):
                     ))
 
         calibration_plugin = CalibratedForecastDistributionParameters(
-            predictor=predictor
+            predictor=predictor, unstandardise_using_forecasts=local_standardise_using_forecasts
         )
         location_parameter, scale_parameter = calibration_plugin(
             forecast_as_realizations, additional_fields_as_realizations,
