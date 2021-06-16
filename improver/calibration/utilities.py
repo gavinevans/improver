@@ -429,16 +429,19 @@ def standardise_forecast_and_truths(
     nanmean = WeightedAggregator("mean", np.nanmean)
     nanstd = WeightedAggregator("standard_deviation", np.nanstd)
 
-    if truths.coords("time", dim_coords=True):
-        truth_mean = truths.collapsed(truth_coords, nanmean)
-    else:
-        truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
+    if not truths.coords("time", dim_coords=True):
+        # Handle a training dataset with a single timestep.
+        msg = ("The truths cube provided does not have a time dimension. "
+               "Multiple times are required to collapse over the time dimension "
+               "to calculate the climatological mean or standard deviation.")
+        raise ValueError(msg)
+        #truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
+        #truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
+
+    truth_mean = truths.collapsed(truth_coords, nanmean)
     truth_mean.rename("ybar")
 
-    if truths.coords("time", dim_coords=True):
-        truth_sd = truths.collapsed(truth_coords, nanstd)
-    else:
-        truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
+    truth_sd = truths.collapsed(truth_coords, nanstd)
     truth_sd.rename("ysig")
 
     std_truth = (truths - truth_mean) / truth_sd
@@ -447,15 +450,21 @@ def standardise_forecast_and_truths(
     std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
     std_forecast.rename(historic_forecasts.name())
 
-    # Ensure that masked values in the truth created by the standardisation
-    # are also masked in the forecast.
-    (rdim,) = std_forecast.coord_dims("realization")
-    expanded_truth = np.repeat(
-        np.expand_dims(std_truth.data.mask, axis=rdim),
-        len(std_forecast.coord("realization").points),
-        axis=rdim,
-    )
-    std_forecast.data = np.ma.masked_where(expanded_truth, std_forecast.data)
+    if np.any(np.isclose(truth_sd, 0)):
+        msg = ("Standardised truths cannot be calculated if the truth "
+               "standard deviation is zero. Increasing the training dataset "
+               "length may solve this issue.")
+        raise ValueError(msg)
+
+    # # Ensure that masked values in the truth created by the standardisation
+    # # are also masked in the forecast.
+    # (rdim,) = std_forecast.coord_dims("realization")
+    # expanded_truth = np.repeat(
+    #     np.expand_dims(std_truth.data.mask, axis=rdim),
+    #     len(std_forecast.coord("realization").points),
+    #     axis=rdim,
+    # )
+    # std_forecast.data = np.ma.masked_where(expanded_truth, std_forecast.data)
     return std_forecast, std_truth, forecast_mean, forecast_sd, truth_mean, truth_sd
 
 
