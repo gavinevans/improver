@@ -1392,7 +1392,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             raise ValueError(msg)
 
         coefficients_cubelist = iris.cube.CubeList()
-        if any(self.local_standardise, self.local_standardise_using_forecasts, self.global_standardise):
+        if any([self.local_standardise, self.local_standardise_using_forecasts, self.global_standardise]):
             # TODO: Extend local standardisation to handle additional fields.
             # historic_forecasts, hf_mean, hf_sd = standardise_forecasts(
             #     historic_forecasts, hf_coords=historic_forecasts.coords(dim_coords=True))
@@ -2015,12 +2015,12 @@ class ApplyEMOS(PostProcessingPlugin):
         standardisers = iris.cube.CubeList([c for c in coefficients if c.name() not in allowed_coeff_names])
         coefficients = iris.cube.CubeList([c for c in coefficients if c.name() in allowed_coeff_names])
 
-        if (any(local_standardise, local_standardise_using_forecasts, global_standardise)
+        if (any([local_standardise, local_standardise_using_forecasts, global_standardise])
                 and not standardisers):
             msg = ("Unstandardisation is requested but the mean and standard "
                    "deviation are not available.")
             ValueError(msg)
-        elif (not (local_standardise, local_standardise_using_forecasts, global_standardise) and standardisers):
+        elif (not any([local_standardise, local_standardise_using_forecasts, global_standardise]) and standardisers):
             msg = ("No unstandardisation is requested but the mean and "
                    "standard deviation to unstandardise is available.")
 

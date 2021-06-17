@@ -33,7 +33,6 @@
 Statistics (EMOS), otherwise known as Non-homogeneous Gaussian
 Regression (NGR)."""
 
-from operator import add
 from improver import cli
 
 
@@ -46,7 +45,7 @@ def process(
     point_by_point=False,
     use_default_initial_guess=False,
     local_standardise=False,
-    local_standardise_using_forecast=False,
+    local_standardise_using_forecasts=False,
     global_standardise=False,
     land_sea_mask_name: str = None,
     units=None,
@@ -93,7 +92,7 @@ def process(
             the additive coefficients. If False, the initial guess is computed.
         local_standardise (bool):
 
-        local_standardise_using_forecast (bool):
+        local_standardise_using_forecasts (bool):
 
         global_standardise (bool):
 
@@ -141,7 +140,7 @@ def process(
         point_by_point=point_by_point,
         use_default_initial_guess=use_default_initial_guess,
         local_standardise=local_standardise,
-        local_standardise_using_forecast=local_standardise_using_forecast,
+        local_standardise_using_forecasts=local_standardise_using_forecasts,
         global_standardise=global_standardise,
         desired_units=units,
         predictor=predictor,

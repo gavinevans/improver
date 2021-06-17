@@ -138,6 +138,8 @@ def filter_obs(spot_truths_cubelist: CubeList) -> CubeList:
         CubeList of spot truths with consistent values for the altitude,
         latitude and longitude at each timestep.
     """
+    if not all([c if c.coords("spot_index") else False for c in spot_truths_cubelist]):
+        return spot_truths_cubelist
     altitudes = np.squeeze(
         scipy.stats.mode(
             np.stack([c.coord("altitude").points for c in spot_truths_cubelist]), axis=0
