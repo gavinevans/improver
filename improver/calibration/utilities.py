@@ -192,6 +192,7 @@ def filter_non_matching_cubes(
     matching_historic_forecasts = iris.cube.CubeList([])
     matching_truths = iris.cube.CubeList([])
     matching_additional_fields = iris.cube.CubeList([])
+    afs_with_time = [af_cube for af_cube in additional_fields if af_cube.coords("time")]
     for hf_slice in historic_forecast.slices_over("time"):
         if hf_slice.coord("time").has_bounds():
             point = iris_time_to_datetime(
@@ -215,15 +216,15 @@ def filter_non_matching_cubes(
         constr = iris.Constraint(coord_values=coord_values)
         truth_slice = truth.extract(constr)
 
-        if truth_slice and not additional_fields:
+        if truth_slice and not afs_with_time:
             matching_historic_forecasts.append(hf_slice)
             matching_truths.append(truth_slice)
 
-        if additional_fields:
+        if afs_with_time:
             constr = iris.Constraint(coord_values=coord_values)
             af_slices = [
                 af_cube.extract(constr)
-                for af_cube in additional_fields
+                for af_cube in afs_with_time
                 if af_cube.extract(constr) is not None
             ]
             if truth_slice and af_slices:
@@ -232,6 +233,7 @@ def filter_non_matching_cubes(
                 matching_additional_fields.extend(af_slices)
 
     if additional_fields:
+        # Add additional fields without a time coordinate.
         matching_additional_fields.extend(
             [af_cube for af_cube in additional_fields if not af_cube.coords("time")]
         )

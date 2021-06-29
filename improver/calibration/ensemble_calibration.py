@@ -1569,7 +1569,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                 forecast_predictor = fp.extract(constr)
                 if not forecast_predictor:
                     new_forecast_predictors.append(fp)
-                forecast_predictor, = forecast_predictor
+                    continue
                 forecast_predictor_orig = forecast_predictor.copy()
                 unstandardised_predictor = (forecast_predictor - self.standardise_cubelist.extract_strict("fbar"))/self.standardise_cubelist.extract_strict("fsig")
                 unstandardised_predictor.rename(forecast_predictor.name())
