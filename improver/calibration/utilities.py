@@ -215,7 +215,7 @@ def filter_non_matching_cubes(
         constr = iris.Constraint(coord_values=coord_values)
         truth_slice = truth.extract(constr)
 
-        if truth_slice:
+        if truth_slice and not additional_fields:
             matching_historic_forecasts.append(hf_slice)
             matching_truths.append(truth_slice)
 
@@ -227,6 +227,8 @@ def filter_non_matching_cubes(
                 if af_cube.extract(constr) is not None
             ]
             if af_slices:
+                matching_historic_forecasts.append(hf_slice)
+                matching_truths.append(truth_slice)
                 matching_additional_fields.extend(af_slices)
 
     if additional_fields:

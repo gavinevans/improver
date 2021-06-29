@@ -327,6 +327,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
             for fp_cube in forecast_predictors:
                 extracted_cube = fp_cube.extract(constr)
                 if not fp_cube.coords("time"):
+                    # Broadcast static predictors to the required shape.
                     multitime_fp_data = np.broadcast_to(extracted_cube.data, (len(truth_slice.coord("time").points),)+extracted_cube.shape)
                     new_fp_data.append(multitime_fp_data)
                 else:
@@ -397,6 +398,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
             for fp_cube in forecast_predictors:
                 fp_data = fp_cube.data
                 if not fp_cube.coords("time"):
+                    # Broadcast static predictors to the required shape.
                     fp_data = np.broadcast_to(fp_cube.data, (len(truth.coord("time").points),)+fp_cube.shape)
                 fp_data_list.append(flatten_ignoring_masked_data(fp_data))
             forecast_predictor_data = np.vstack(fp_data_list).T
@@ -1250,6 +1252,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 for fp_cube in forecast_predictors:
                     extracted_cube = fp_cube.extract(constr)
                     if not fp_cube.coords("time"):
+                        # Broadcast static predictors to the required shape.
                         multitime_fp_data = np.broadcast_to(extracted_cube.data, (len(truths.coord("time").points),)+extracted_cube.shape)
                         new_fp_data.append(multitime_fp_data)
                     else:
@@ -1268,6 +1271,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             new_fp_data = []
             for fp_cube in forecast_predictors:
                 if not fp_cube.coords("time"):
+                    # Broadcast static predictors to the required shape.
                     multitime_fp_data = np.broadcast_to(fp_cube.data, (len(truths.coord("time").points),)+fp_cube.shape)
                     new_fp_data.append(multitime_fp_data)
                 else:
