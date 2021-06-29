@@ -158,6 +158,9 @@ def process(
         predictor=predictor,
         randomise=randomise,
         random_seed=random_seed,
+        local_standardise=local_standardise,
+        local_standardise_using_forecasts=local_standardise_using_forecasts,
+        global_standardise=global_standardise,
     )
 
     return result

@@ -132,7 +132,6 @@ def process(
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
-
     forecast, truth, additional_fields, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute, land_sea_mask_name)
 
     plugin = EstimateCoefficientsForEnsembleCalibration(

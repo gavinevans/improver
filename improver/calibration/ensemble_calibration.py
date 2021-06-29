@@ -61,6 +61,7 @@ from improver.calibration.utilities import (
     flatten_ignoring_masked_data,
     forecast_coords_match,
     merge_land_and_sea,
+    standardise_forecast_and_truths,
     standardise_forecasts,
     standardise_truths,
     statsmodels_available,
@@ -1401,8 +1402,11 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             historic_forecasts, truths, hf_mean, hf_sd, tr_mean, tr_sd = standardise_forecast_and_truths(
                 historic_forecasts, truths, global_standardise=self.global_standardise,
                 using_forecasts=self.local_standardise_using_forecasts)
-            # Note that these are not coefficients.
-            coefficients_cubelist.extend(iris.cube.CubeList([hf_mean, hf_sd, tr_mean, tr_sd]))
+            if not all([tr_mean, tr_sd]):
+                coefficients_cubelist.extend(iris.cube.CubeList([hf_mean, hf_sd]))
+            else:
+                # Note that these are not coefficients.
+                coefficients_cubelist.extend(iris.cube.CubeList([hf_mean, hf_sd, tr_mean, tr_sd]))
 
         number_of_realizations = None
         if self.predictor.lower() == "mean":
@@ -1555,14 +1559,17 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             raise ValueError(msg)
 
         if self.standardise_cubelist:
-            constr = iris.AttributeConstraint(diagnostic_standard_name=self.coefficients_cubelist[0].attributes["diagnostic_standard_name"])
+            constr = iris.Constraint(self.coefficients_cubelist[0].attributes["diagnostic_standard_name"])
             new_forecast_predictors = iris.cube.CubeList()
             for fp in forecast_predictors:
                 forecast_predictor = forecast_predictors.extract(constr)
                 if not forecast_predictor:
-                    new_forecast_predictors.append(forecast_predictor)
+                    new_forecast_predictors.append(fp)
+                forecast_predictor, = forecast_predictor
                 forecast_predictor_orig = forecast_predictor.copy()
-                new_forecast_predictors.append((forecast_predictor - self.standardise_cubelist.extract_strict("fbar"))/self.standardise_cubelist.extract_strict("fsig"))
+                unstandardised_predictor = (forecast_predictor - self.standardise_cubelist.extract_strict("fbar"))/self.standardise_cubelist.extract_strict("fsig")
+                unstandardised_predictor.rename(forecast_predictor.name())
+                new_forecast_predictors.append(unstandardised_predictor)
             forecast_predictors = new_forecast_predictors
 
         # Calculate location parameter = a + b*X, where X is the

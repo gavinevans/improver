@@ -209,7 +209,7 @@ def split_forecasts_and_coeffs(
                 cube_name = get_diagnostic_cube_name_from_probability_name(cube.name())
             except ValueError:
                 cube_name = cube.name()
-            if "emos_coefficient" in cube_name or "shape_parameters" == cube_name:
+            if "emos_coefficient" in cube_name or "shape_parameters" == cube_name or cube_name in ["fbar", "fsig", "ybar", "ysig"]:
                 cubes_dict["coefficients"].setdefault(cube_name, []).append(cube)
             elif cube_name == land_sea_mask_name:
                 cubes_dict["land_sea_mask"] = cube
@@ -220,7 +220,7 @@ def split_forecasts_and_coeffs(
         raise IOError("Expected one cube for land-sea mask with "
                       f"the name {land_sea_mask_name}.")
 
-    diagnostic_standard_name = list(set([v[0].attributes["diagnostic_standard_name"] for v in cubes_dict["coefficients"].values()]))
+    diagnostic_standard_name = list(set([v[0].attributes["diagnostic_standard_name"] for v in cubes_dict["coefficients"].values() if v[0].attributes.get("diagnostic_standard_name")]))
     if len(diagnostic_standard_name) == 1:
         diagnostic_standard_name, = diagnostic_standard_name
     else:

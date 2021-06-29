@@ -427,42 +427,58 @@ def standardise_forecast_and_truths(
     forecast_sd = historic_forecasts.collapsed(hf_coords, iris.analysis.STD_DEV)
     forecast_sd.rename("fsig")
 
+    std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
+    std_forecast.rename(historic_forecasts.name())
+
+    if using_forecasts:
+        std_truth = (truths - forecast_mean) / forecast_sd
+        std_truth.rename(truths.name())
+        # Replace masked values created by dividing existing NaN truth values
+        # by a number (truth_sd). Otherwise, the "flatten_ignoring_masked_data"
+        # call in compute_initial_guess ignores these masked truths and ends up
+        # with a different number of points between the truth and the forecast.
+        std_truth.data = std_truth.data.filled(np.nan)
+        return std_forecast, std_truth, forecast_mean, forecast_sd, None, None
+
+    # If using the truth to standardise
+    if not truths.coords("time", dim_coords=True):
+        # Handle a training dataset with a single timestep.
+        msg = ("The truths cube provided does not have a time dimension. "
+            "Multiple times are required to collapse over the time dimension "
+            "to calculate the climatological mean or standard deviation.")
+        raise ValueError(msg)
+        #truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
+        #truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
+
     # Use nanmean and nanstd as observations can sometimes be missing i.e. nan.
     from iris.analysis import WeightedAggregator
 
     nanmean = WeightedAggregator("mean", np.nanmean)
     nanstd = WeightedAggregator("standard_deviation", np.nanstd)
 
-    if using_forecasts:
-        std_truth = (truths - forecast_mean) / forecast_sd
-        std_truth.rename(truths.name())
-    else:
-        if not truths.coords("time", dim_coords=True):
-            # Handle a training dataset with a single timestep.
-            msg = ("The truths cube provided does not have a time dimension. "
-                "Multiple times are required to collapse over the time dimension "
-                "to calculate the climatological mean or standard deviation.")
-            raise ValueError(msg)
-            #truth_mean = truths.copy(np.full(truths.shape, np.nanmean(truths.data)))
-            #truth_sd = truths.copy(np.full(truths.shape, np.nanstd(truths.data)))
+    truth_mean = truths.collapsed(truth_coords, nanmean)
+    truth_mean.rename("ybar")
 
-        truth_mean = truths.collapsed(truth_coords, nanmean)
-        truth_mean.rename("ybar")
+    truth_sd = truths.collapsed(truth_coords, nanstd)
+    truth_sd.rename("ysig")
 
-        truth_sd = truths.collapsed(truth_coords, nanstd)
-        truth_sd.rename("ysig")
+    std_truth = (truths - truth_mean) / truth_sd
+    std_truth.rename(truths.name())
+    # Replace masked values created by dividing existing NaN truth values
+    # by a number (truth_sd). Otherwise, the "flatten_ignoring_masked_data"
+    # call in compute_initial_guess ignores these masked truths and ends up
+    # with a different number of points between the truth and the forecast.
+    std_truth.data = std_truth.data.filled(np.nan)
 
-        std_truth = (truths - truth_mean) / truth_sd
-        std_truth.rename(truths.name())
-
-        if np.any(np.isclose(truth_sd, 0)):
-            msg = ("Standardised truths cannot be calculated if the truth "
-                "standard deviation is zero. Increasing the training dataset "
-                "length may solve this issue.")
-            raise ValueError(msg)
-
-    std_forecast = (historic_forecasts - forecast_mean) / forecast_sd
-    std_forecast.rename(historic_forecasts.name())
+    # This check has been commented out because there are instances where a
+    # particular site has only one observation from a 30 day training dataset.
+    # This leads to a standard deviation of 0 for that site. A standard
+    # deviation of 0 will result in std_truth being NaN for the site anyway.
+    # if np.any(np.isclose(truth_sd.data, 0)):
+    #     msg = ("Standardised truths cannot be calculated if the truth "
+    #            "standard deviation is zero. Increasing the training dataset "
+    #            "length may solve this issue.")
+    #     raise ValueError(msg)
 
     # # Ensure that masked values in the truth created by the standardisation
     # # are also masked in the forecast.
