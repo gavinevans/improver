@@ -1566,7 +1566,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             constr = iris.Constraint(self.coefficients_cubelist[0].attributes["diagnostic_standard_name"])
             new_forecast_predictors = iris.cube.CubeList()
             for fp in forecast_predictors:
-                forecast_predictor = forecast_predictors.extract(constr)
+                forecast_predictor = fp.extract(constr)
                 if not forecast_predictor:
                     new_forecast_predictors.append(fp)
                 forecast_predictor, = forecast_predictor
