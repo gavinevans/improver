@@ -221,6 +221,13 @@ def filter_non_matching_cubes(
             matching_truths.append(truth_slice)
 
         if afs_with_time:
+            # Only consider the point of the time coordinate for additional
+            # fields.
+            coord_values = {
+                "time": iris_time_to_datetime(
+                    hf_slice.coord("time"), point_or_bound="point"
+                )
+            }
             constr = iris.Constraint(coord_values=coord_values)
             af_slices = [
                 af_cube.extract(constr)
