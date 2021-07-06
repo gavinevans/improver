@@ -1557,10 +1557,17 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             else:
                 forecast_predictors.append(af)
 
+        fp_names = [fp.name() for fp in forecast_predictors]
         if len(forecast_predictors) != len(self.coefficients_cubelist.extract_strict("emos_coefficient_beta").coord("predictor_index").points):
             msg = ("The number of forecast predictors must equal the number of "
-                   "beta coefficients in order to create a calibrated forecast.")
+                   "beta coefficients in order to create a calibrated forecast. "
+                   f"Number of predictor cubes = {len(forecast_predictors)}: {fp_names}, "
+                   f"Number of predictor coords = {len(self.coefficients_cubelist.extract_strict('emos_coefficient_beta').coord('predictor_index').points)}: {self.coefficients_cubelist.extract_strict('emos_coefficient_beta').coord('predictor_name').points}")
             raise ValueError(msg)
+        else:
+            fp_names = [fp.name() for fp in forecast_predictors]
+            print("predictor_cube_names = ", fp_names)
+            print("predictor_coord_names", self.coefficients_cubelist.extract_strict("emos_coefficient_beta").coord("predictor_name").points)
 
         if self.standardise_cubelist:
             constr = iris.Constraint(self.coefficients_cubelist[0].attributes["diagnostic_standard_name"])
@@ -2049,6 +2056,8 @@ class ApplyEMOS(PostProcessingPlugin):
                     additional_fields_as_realizations.append(self._convert_to_realizations(
                         af.copy(), realizations_count, ignore_ecc_bounds
                     ))
+                else:
+                    additional_fields_as_realizations.append(af)
 
         calibration_plugin = CalibratedForecastDistributionParameters(
             predictor=predictor, unstandardise_using_forecasts=local_standardise_using_forecasts
