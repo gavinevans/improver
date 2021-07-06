@@ -52,9 +52,9 @@ set -eu
 export IMPROVER_DIR="$(cd $(dirname $0)/../ && pwd -P)"
 
 # Apply site-specific setup if necessary.
-# if [[ -f "${IMPROVER_SITE_INIT:=$IMPROVER_DIR/etc/site-init}" ]]; then
-#     . "$IMPROVER_SITE_INIT"
-# fi
+if [[ -f "${IMPROVER_SITE_INIT:=$IMPROVER_DIR/etc/site-init}" ]]; then
+    . "$IMPROVER_SITE_INIT"
+fi
 
 # Put our library and scripts in the paths.
 export PATH="$IMPROVER_DIR/bin/:$PATH"
