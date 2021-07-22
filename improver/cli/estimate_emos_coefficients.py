@@ -44,6 +44,10 @@ def process(
     truth_attribute,
     point_by_point=False,
     use_default_initial_guess=False,
+    local_standardise=False,
+    local_standardise_using_forecasts=False,
+    global_standardise=False,
+    land_sea_mask_name: str = None,
     units=None,
     predictor="mean",
     tolerance: float = 0.02,
@@ -86,6 +90,16 @@ def process(
             predictor to generate the calibrated distribution. This means
             coefficients of 1 for the multiplicative coefficients and 0 for
             the additive coefficients. If False, the initial guess is computed.
+        local_standardise (bool):
+
+        local_standardise_using_forecasts (bool):
+
+        global_standardise (bool):
+
+        land_sea_mask_name (str):
+            Name of the land-sea mask cube. If supplied, a land-sea mask cube
+            is expected within the list of input cubes and this land-sea mask
+            will be used to calibrate land points only.
         units (str):
             The units that calibration should be undertaken in. The historical
             forecast and truth will be converted as required.
@@ -118,16 +132,18 @@ def process(
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
-
-    forecast, truth, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute)
+    forecast, truth, additional_fields, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute, land_sea_mask_name)
 
     plugin = EstimateCoefficientsForEnsembleCalibration(
         distribution,
         point_by_point=point_by_point,
         use_default_initial_guess=use_default_initial_guess,
+        local_standardise=local_standardise,
+        local_standardise_using_forecasts=local_standardise_using_forecasts,
+        global_standardise=global_standardise,
         desired_units=units,
         predictor=predictor,
         tolerance=tolerance,
         max_iterations=max_iterations,
     )
-    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+    return plugin(forecast, truth, additional_fields=additional_fields, landsea_mask=land_sea_mask)

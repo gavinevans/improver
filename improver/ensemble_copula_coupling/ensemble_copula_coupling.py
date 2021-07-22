@@ -736,13 +736,15 @@ calculate_truncated_normal_crps`,
             )
             raise AttributeError(msg)
 
-        if shape_parameters is None:
-            if self.distribution.name == "truncnorm":
+        if isinstance(shape_parameters, iris.cube.Cube):
+            shape_parameters = shape_parameters.data.flatten()
+        elif shape_parameters is None:
+            if self.distribution.name in ["genlogistic", "truncnorm"]:
                 raise ValueError(
-                    "For the truncated normal distribution, "
+                    f"For the {self.distribution.name} distribution, "
                     "shape parameters must be specified."
                 )
-            shape_parameters = []
+            shape_parameters = {}
         self.shape_parameters = shape_parameters
 
     def __repr__(self) -> str:
@@ -787,6 +789,13 @@ calculate_truncated_normal_crps`,
             for value in self.shape_parameters:
                 rescaled_values.append((value - location_parameter) / scale_parameter)
             self.shape_parameters = rescaled_values
+
+    def _shape_parameters_for_args(self):
+        """Prepare arguments for defining the distribution."""
+        if self.distribution.name == "truncnorm":
+            self.shape_parameters = dict(zip(["a", "b"], self.shape_parameters))
+        elif self.distribution.name == "genlogistic":
+            self.shape_parameters = {"c": self.shape_parameters}
 
 
 class ConvertLocationAndScaleParametersToPercentiles(
@@ -852,9 +861,10 @@ class ConvertLocationAndScaleParametersToPercentiles(
 
         self._rescale_shape_parameters(location_data, np.sqrt(scale_data))
 
-        percentile_method = self.distribution(
-            *self.shape_parameters, loc=location_data, scale=np.sqrt(scale_data)
-        )
+        self._shape_parameters_for_args()
+        parameters = self.shape_parameters.copy()
+        parameters.update({"loc": location_data, "scale": np.sqrt(scale_data)})
+        percentile_method = self.distribution(**parameters)
 
         # Loop over percentiles, and use the distribution as the
         # "percentile_method" with the location and scale parameter to
