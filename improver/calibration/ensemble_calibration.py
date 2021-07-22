@@ -1680,6 +1680,8 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                     * forecast_var.data/self.standardise_cubelist.extract_strict("fsig").data**2) *
                     self.standardise_cubelist.extract_strict("ysig").data**2
                 ).astype(np.float32)
+                index = scale_parameter.mask
+                scale_parameter[index] = forecast_var.data[index]
         else:
             scale_parameter = (
                 self.coefficients_cubelist.extract_strict("emos_coefficient_gamma").data
