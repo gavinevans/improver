@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Union
 
 import cf_units
+import cftime
 import iris
 import numpy as np
 from iris import Constraint
@@ -144,9 +145,10 @@ def iris_time_to_datetime(
     return datetime_list
 
 
-def datetime_to_iris_time(dt_in: datetime) -> float:
+def datetime_to_iris_time(dt_in: Union[datetime, cftime.DatetimeGregorian]) -> float:
     """
-    Convert python datetime.datetime into seconds since 1970-01-01 00Z.
+    Convert python datetime.datetime or cftime.DatetimeGregorian object into
+    seconds since 1970-01-01 00Z.
 
     Args:
         dt_in:
@@ -155,6 +157,10 @@ def datetime_to_iris_time(dt_in: datetime) -> float:
     Returns:
         Time since epoch in the seconds as desired dtype.
     """
+    if isinstance(dt_in, cftime.DatetimeGregorian):
+        dt_in = datetime(
+            dt_in.year, dt_in.month, dt_in.day, dt_in.hour, dt_in.minute, dt_in.second
+        )
     result = dt_in.replace(tzinfo=timezone.utc).timestamp()
     return np.int64(result)
 
