@@ -35,14 +35,14 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Union
 
 import cf_units
-import cftime
 import iris
 import numpy as np
+from cftime import DatetimeGregorian
 from iris import Constraint
 from iris.coords import AuxCoord, Coord
 from iris.cube import Cube, CubeList
 from iris.time import PartialDateTime
-from numpy import ndarray
+from numpy import int64, ndarray
 
 from improver import PostProcessingPlugin
 from improver.metadata.check_datatypes import enforce_dtype
@@ -145,7 +145,7 @@ def iris_time_to_datetime(
     return datetime_list
 
 
-def datetime_to_iris_time(dt_in: Union[datetime, cftime.DatetimeGregorian]) -> float:
+def datetime_to_iris_time(dt_in: Union[datetime, DatetimeGregorian]) -> int64:
     """
     Convert python datetime.datetime or cftime.DatetimeGregorian object into
     seconds since 1970-01-01 00Z.
@@ -155,9 +155,9 @@ def datetime_to_iris_time(dt_in: Union[datetime, cftime.DatetimeGregorian]) -> f
             Time to be converted into seconds since 1970-01-01 00Z.
 
     Returns:
-        Time since epoch in the seconds as desired dtype.
+        Time since epoch in the seconds.
     """
-    if isinstance(dt_in, cftime.DatetimeGregorian):
+    if isinstance(dt_in, DatetimeGregorian):
         dt_in = datetime(
             dt_in.year, dt_in.month, dt_in.day, dt_in.hour, dt_in.minute, dt_in.second
         )
