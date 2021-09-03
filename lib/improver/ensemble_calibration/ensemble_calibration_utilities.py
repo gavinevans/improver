@@ -37,7 +37,6 @@ import iris
 import numpy as np
 import pandas as pd
 import datetime
-from iris.time import PartialDateTime
 
 from improver.utilities.cube_manipulation import merge_cubes
 
@@ -192,10 +191,11 @@ class SplitHistoricForecastAndTruth():
 
         for input_dict in [self.historic_forecast_dict, self.truth_dict]:
             for key in input_dict.keys():
-                if key != "attributes":
-                    msg = ("At present, 'attributes' is the only supported "
-                           "key for the input. Support for specifying other "
-                           "metadata can be added if required.")
+                if key not in ["attributes", "coords"]:
+                    msg = ("At present, 'attributes' and 'coords' are the "
+                           "only supported key for the input. Support for "
+                           "specifying other metadata can be added if "
+                           "required.")
                     raise NotImplementedError(msg)
 
     def __repr__(self):
@@ -228,7 +228,10 @@ class SplitHistoricForecastAndTruth():
                 The metadata supplied resulted in no matching cubes.
 
         """
-        constr = iris.AttributeConstraint(**input_dict["attributes"])
+        if "attributes" in input_dict.keys():
+            constr = iris.AttributeConstraint(**input_dict["attributes"])
+        elif "coords" in input_dict.keys():
+            constr = iris.Constraint(**input_dict["coords"])
         cubelist = cubes.extract(constr)
         if not cubelist:
             msg = ("The metadata to identify the desired historic forecast or "
@@ -263,7 +266,7 @@ class SplitHistoricForecastAndTruth():
         return merge_cubes(historic_forecasts), merge_cubes(truths)
 
 
-def extract_regimes(reg_df, init_date, final_date):
+def extract_regimes(reg_df, date_list, val_time=False, lead=None):
     """
     Function that loads the atmospheric regime from the eight patterns
     used in Decider that occurred on a given range of dates.
@@ -272,73 +275,112 @@ def extract_regimes(reg_df, init_date, final_date):
         reg_df (pandas.DataFrame):
             Data frame containing the prevailing weather regime on
             historical dates.
-        init_date (datetime.datetime):
-            The first date for which the regime is required.
-        final_date (datetime.datetime):
-            The last date for which the regime is required.
+        date_list (numpy.array):
+            numpy array containing a list of dates at which the regime
+            is required.
+        val_time (Bool):
+            Logical which is true if the regime at the validation
+            time is required and false otherwise.
+        lead (int):
+            If the regime at the validity time is required then
+            the forecast lead time (in hours) must be specified.
     Returns:
         reg_list (pandas.DataFrame):
             Data frame containing the dates of interest as datetime
             objects and the coinciding weather regimes.
     """
-    # Remove cycletimes from datetime objects
-    init_date = datetime.datetime(year=init_date.year,
-                                  month=init_date.month,
-                                  day=init_date.day,
-                                  hour=12)
-    final_date = datetime.datetime(year=final_date.year,
-                                   month=final_date.month,
-                                   day=final_date.day,
-                                   hour=12)
+    if val_time and not lead:
+        msg = ("The regime at the forecast validity time is desired"
+               "but no lead time has been specified.")
+        raise ValueError(msg)
 
     n_dates = reg_df.shape[0]
-    date_list = []
+    all_dates = []
     for i in range(n_dates):
-        date_list.append(datetime.datetime(
+        all_dates.append(datetime.datetime(
             year=reg_df.year[i], month=reg_df.month[i],
             day=reg_df.day[i], hour=reg_df.hour[i]))
-    date_list = np.array(date_list)
+    all_dates = np.array(all_dates)
 
-    w_len = (final_date - init_date).days + 1
+    w_len = len(date_list)
 
-    # Convert dates to datetime objects
-    reg_list = pd.DataFrame(0, index=range(w_len), columns=["date", "regime"])
+    reg_list = pd.DataFrame(0, index=range(w_len),
+                            columns=["date", "regime"])
     for i in range(w_len):
-        date = init_date + datetime.timedelta(i)
-        reg_list.date[i] = PartialDateTime(year=date.year, month=date.month,
-                                           day=date.day)
-        reg_list.regime[i] = reg_df.T0[date_list == date]
+        date = date_list[i]
+        reg_list.date[i] = date
+        # if the regime at validity time is required then use the regime
+        # at the date closest to the validation time
+        # if the regime at the initialisation time is required then use
+        # the last regime observed prior to the initialisation time
+        if val_time:
+            reg_list.regime[i] = reg_df["T{}".format(str(24*(lead//24 + 1)))][
+                all_dates == max(all_dates[all_dates <= date])]
+        else:
+            reg_list.regime[i] = \
+                reg_df["T0"][all_dates == max(all_dates[all_dates <= date])]
 
     return reg_list
 
 
-def identify_regime(reg_df, date):
+def get_regime_probabilities(forecast_cube):
     """
     Function that loads the atmospheric regime from the eight patterns
-    used in Decider that occurred on one given date.
+    used in Decider that occurred on a given range of dates.
 
     Args:
-        reg_df (pandas.DataFrame):
-            Data frame containing the prevailing weather regime on
-            historical dates.
-        date (datetime.datetime):
-            The first date for which the regime is required.
+        forecast_cube (iris Cube)
+            Cube containing the forecasts for which the conditional
+            regime probabilities are desired.
     Returns:
-        regime (pandas.DataFrame):
-            Integer specifying the regime at the date of interest.
+        reg_mat (np Matrix):
+            Matrix containing the regime weights for each date of interest
     """
+    val_times = forecast_cube.coord("time").points
+    lead = int(forecast_cube.coord("forecast_period").points[0] // 3600)
 
-    date = datetime.datetime(year=date.year, month=date.month,
-                             day=date.day, hour=12)
+    val_dates = np.array([datetime.datetime.fromtimestamp(val_times[i]) for i in range(len(val_times))])
+    init_dates = val_dates - datetime.timedelta(hours=lead)
 
-    n_dates = reg_df.shape[0]
-    date_list = []
-    for i in range(n_dates):
-        date_list.append(datetime.datetime(
-            year=reg_df.year[i], month=reg_df.month[i],
-            day=reg_df.day[i], hour=reg_df.hour[i]))
-    date_list = np.array(date_list)
+    val_dates = np.array([datetime.datetime(year=val_dates[i].year, month=val_dates[i].month, day=val_dates[i].day,
+                                            hour=12) for i in range(len(val_dates))])
+    if init_dates[0].hour < 12:
+        init_dates = init_dates - datetime.timedelta(days=1)
+    init_dates = np.array([datetime.datetime(year=init_dates[i].year, month=init_dates[i].month,
+                                             day=init_dates[i].day, hour=12) for i in range(len(init_dates))])
 
-    regime = reg_df.T0[date_list == date]
+    lead = 24*(val_dates[0] - init_dates[0]).days
+    reg_df = pd.read_csv("/home/d02/sallen/coefficient_files/6Reg_Conditional_DataFrame_{}.csv".format(lead))
+    reg_df["date"] = np.array([datetime.datetime(year=int(reg_df["date"][i][0:4]), month=int(reg_df["date"][i][5:7]),
+                                                 day=int(reg_df["date"][i][8:10]), hour=int(reg_df["date"][i][11:13]))
+                               for i in range(len(reg_df["date"]))])
 
-    return regime
+    n_reg = len(reg_df.columns) - 2
+    reg_mat = np.empty((len(val_dates), n_reg))
+    for counter, date in enumerate(val_dates):
+        print(date)
+        reg_mat[counter, :] = np.array(reg_df[reg_df["date"] == date].iloc[:, 2:])
+
+    return reg_mat
+
+
+def fo_standardise(forecast, truth):
+    # standardise ensemble members using the mean and standard deviation of the ensemble mean
+    ens_mean = forecast.collapsed("realization", iris.analysis.MEAN)
+    forecast_mean = ens_mean.collapsed("time", iris.analysis.MEAN)
+    forecast_sd = ens_mean.collapsed("time", iris.analysis.STD_DEV)
+    truth_mean = truth.collapsed("time", iris.analysis.MEAN)
+    truth_sd = truth.collapsed("time", iris.analysis.STD_DEV)
+    std_truth = (truth - truth_mean)/truth_sd
+    std_forecast = (forecast - forecast_mean)/forecast_sd
+    return std_forecast, std_truth, forecast_mean, forecast_sd, truth_mean, truth_sd
+
+
+def fo_centre(forecast, truth):
+    # standardise ensemble members using the mean and standard deviation of the ensemble mean
+    ens_mean = forecast.collapsed("realization", iris.analysis.MEAN)
+    forecast_mean = ens_mean.collapsed("time", iris.analysis.MEAN)
+    truth_mean = truth.collapsed("time", iris.analysis.MEAN)
+    cent_truth = truth - truth_mean
+    cent_forecast = forecast - forecast_mean
+    return cent_forecast, cent_truth, forecast_mean, truth_mean

@@ -38,28 +38,34 @@ import warnings
 import numpy as np
 import pandas as pd
 import iris
-
+from scipy.stats import boxcox, yeojohnson
 from improver.argparser import ArgParser
 from improver.ensemble_calibration.ensemble_calibration import (
     EstimateCoefficientsForEnsembleCalibration,
+    LinearMixedModelCoefficientEstimation,
     estimate_coefficients_from_regimes)
 from improver.ensemble_calibration.ensemble_calibration_utilities import (
-    SplitHistoricForecastAndTruth)
+    SplitHistoricForecastAndTruth, fo_standardise, fo_centre)
 from improver.utilities.load import load_cube, load_cubelist
 from improver.utilities.cli_utilities import (
     load_json_or_none)
 from improver.utilities.save import save_netcdf
-from improver.utilities.cube_metadata import amend_metadata
-
+from improver.metadata.amend import amend_metadata
 
 def correct_metadata(cubelist):
     attributes = {"um_version": "delete"}
-    coordinates = {"forecast_period": {"units": "seconds"}, "time": {"units": "seconds since 1970-01-01 00:00:00"}}
+    coordinates = {"forecast_period": {"units": "seconds"},
+                   "forecast_reference_time":
+                       {"units": "seconds since 1970-01-01 00:00:00"},
+                   "time": {"units": "seconds since 1970-01-01 00:00:00"}}
     new_cubelist = iris.cube.CubeList([])
     for cube in cubelist:
-        cube = amend_metadata(cube, attributes=attributes, coordinates=coordinates)
-        cube.coord(axis="x").points = cube.coord(axis="x").points.astype(np.float32)
-        cube.coord("forecast_period").points = cube.coord("forecast_period").points.astype(np.int32)
+        cube = amend_metadata(cube, attributes=attributes,
+                              coordinates=coordinates)
+        cube.coord(axis="x").points = \
+            cube.coord(axis="x").points.astype(np.float32)
+        cube.coord("forecast_period").points = \
+            cube.coord("forecast_period").points.astype(np.int32)
         new_cubelist.append(cube)
     return new_cubelist
 
@@ -82,7 +88,9 @@ def main(argv=None):
                     'arguments to provide metadata that distinguishes between '
                     'them.')
     parser.add_argument('distribution', metavar='DISTRIBUTION',
-                        choices=['gaussian', 'truncated_gaussian'],
+                        choices=['gaussian', 'truncated_gaussian', 'gaussian_lmm', 'logistic', 't', 'skew_normal',
+                                 'gamma', 'log_normal', 'truncated_logistic', 'generalized_logistic',
+                                 'normal_mixture_model', 'trunc_normal_mixture_model'],
                         help='The distribution that will be used for '
                              'calibration. This will be dependent upon the '
                              'input phenomenon. This has to be supported by '
@@ -184,7 +192,62 @@ def main(argv=None):
                              "and sea points are specified by zeros.")
     parser.add_argument('--regime_filepath', default=None,
                         help='Path to the input csv file containing historic '
-                             'regime occurrences.')
+                             'atmospheric regime occurrences.')
+    parser.add_argument('--val_time', default=False,
+                        action='store_true',
+                        help='Logical that is true if regime-dependent'
+                             'post-processing is to use the regime predicted'
+                             'by the ensemble members at the forecast '
+                             'validation time, and false if the regime at'
+                             'the initialisation time is to be used.')
+    parser.add_argument('--sitespecific', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether or not EMOS '
+                             'coefficients are to be estimated for each '
+                             'grid point separately.')
+    parser.add_argument('--standardise', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be standardised using local'
+                             'means and standard deviations prior to '
+                             'post-processing.')
+    parser.add_argument('--centre', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to b centred using local'
+                             'means prior to post-processing.')
+    parser.add_argument('--log_transform', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be transformed to the log'
+                             'scale prior to post-processing.')
+    parser.add_argument('--sqrt_transform', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be square-root transformed'
+                             'prior to post-processing.')
+    parser.add_argument('--boxcox_transform', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be box-cox transformed'
+                             'prior to post-processing.')
+    parser.add_argument('--yeojohnson_transform', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be transformed using the'
+                             'yeo-johnson transformation prior to post-processing.')
+    parser.add_argument('--yeojohnson_transform_standardised', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be transformed using the'
+                             'yeo-johnson transformation prior to post-processing,'
+                             'using local standardisations.')
+    parser.add_argument('--yeojohnson_transform_centre', default=False,
+                        action='store_true',
+                        help='Logical that specifies whether forecasts and'
+                             'observations are to be transformed using the'
+                             'yeo-johnson transformation prior to post-processing,'
+                             'using local centres.')
     args = parser.parse_args(args=argv)
 
     # Load Cubes
@@ -211,19 +274,29 @@ def main(argv=None):
         reg_df = pd.read_csv(args.regime_filepath, sep=" ", header=None)
         reg_df.columns = ["year", "month", "day", "hour", "T0", "T24", "T48",
                           "T72", "T96", "T120", "T144", "End"]
-        reg_dict = {0: 0, 1: 3, 2: 4, 3: 6, 4: 2, 5: 5, 6: 1, 7: 7, 8: 2,
-                    9: 1, 10: 8, 11: 1, 12: 4, 13: 3, 14: 3, 15: 4, 16: 5,
-                    17: 5, 18: 6, 19: 1, 20: 2, 21: 4, 22: 5, 23: 2, 24: 3,
-                    25: 1, 26: 2, 27: 1, 28: 1, 29: 7, 30: 2}
-        for col_name in ["T0", "T24", "T48", "T72", "T96", "T120", "T144"]:
-            reg_df[col_name] = reg_df[col_name].map(reg_dict)
+
+    transform = None
+    if args.log_transform:
+        transform = "log"
+    elif args.sqrt_transform:
+        transform = "sqrt"
+    elif args.boxcox_transform:
+        transform = "box_cox"
+    elif args.yeojohnson_transform:
+        transform = "yeo_johnson"
+    elif args.yeojohnson_transform_standardised:
+        transform = "yeo_johnson_standardised"
+    elif args.yeojohnson_transform_centre:
+        transform = "yeo_johnson_centre"
 
     # Process Cube
     coefficients = process(historic_forecast, truth, combined,
                            historic_forecast_dict, truth_dict,
                            args.distribution, args.cycletime, landsea_mask,
                            args.units, args.predictor_of_mean,
-                           args.max_iterations, reg_df)
+                           args.max_iterations, reg_df, args.val_time,
+                           args.sitespecific, args.standardise, transform,
+                           args.centre)
     # Save Cube
     # Check whether a coefficients cube has been created. If the historic
     # forecasts and truths provided did not match in validity time, then
@@ -234,7 +307,9 @@ def main(argv=None):
 
 def process(historic_forecast, truth, combined, historic_forecast_dict,
             truth_dict, distribution, cycletime, landsea_mask, units=None,
-            predictor_of_mean='mean', max_iterations=1000, reg_df=None):
+            predictor_of_mean='mean', max_iterations=1000, reg_df=None,
+            val_time=False, sitespecific=False, standardise=False,
+            transform=None, centre=False):
     """Module for estimate coefficients for Ensemble Model Output Statistics.
 
     Loads in arguments for estimating coefficients for Ensemble Model
@@ -305,7 +380,25 @@ def process(historic_forecast, truth, combined, historic_forecast_dict,
         reg_df (pandas.DataFrame):
             A data frame containing a series of past dates and the coinciding
              weather regimes.
-
+        val_time (bool):
+            Logical that is true if regime-dependent
+            post-processing is to use the regime predicted
+            by the ensemble members at the forecast
+            validation time, and false if the regime at
+            the initialisation time is to be used.
+        sitespecific (bool):
+            Logical that specifies whether or not EMOS coefficients are to
+            be estimated for each grid point separately.
+        standardise (bool):
+            Logical that is true if climatological means and standard deviations
+            are to be removed prior to post-processing.
+        transform (str):
+            String that is either "log" if the data is to be log-transformed
+            prior to estimating coefficients or "sqrt" if it is to be
+            square-root transformed.
+        centre (bool):
+            Logical that is true if climatological means is
+             to be removed prior to post-processing.
     Returns:
         result (iris.cube.Cube or None):
             Cube containing the coefficients estimated using EMOS. The cube
@@ -324,6 +417,9 @@ def process(historic_forecast, truth, combined, historic_forecast_dict,
         ValueError: All of the combined_filepath, historic_forecast_identifier
             and truth_identifier arguments should be specified if one of the
             arguments are specified.
+        ValueError: If regime-dependent post-processing is to be conditioned
+            on the regime at validation time but no regime information is
+            included as input.
 
     Warns:
         UserWarning: The metadata to identify the desired historic forecast or
@@ -379,20 +475,99 @@ def process(historic_forecast, truth, combined, historic_forecast_dict,
         else:
             raise
     else:
+        trans_params = None
+        if transform is not None:
+            if transform == "log":
+                print("Performing log transformation")
+                # add very small number to zero wind speeds
+                truth.data[truth.data == 0] = 0.00001
+                historic_forecast.data[historic_forecast.data == 0] = 0.00001
+                historic_forecast.data = np.log(historic_forecast.data)
+                truth.data = np.log(truth.data)
+            elif transform == "sqrt":
+                print("Performing square-root transformation")
+                historic_forecast.data = np.sqrt(historic_forecast.data)
+                truth.data = np.sqrt(truth.data)
+            elif transform == "box_cox":
+                print("Performing Box-Cox transformation")
+                truth_mean = np.mean(truth.data)
+                truth_sd = np.std(truth.data)
+                truth.data = (truth.data - truth_mean) / truth_sd
+                truth_std_min = np.floor(np.min(truth.data))
+                truth.data -= truth_std_min
+                truth.data[truth.data == 0] = 0.00001
+                dat_truth, bc_lambda = boxcox(truth.data.flatten())
+
+                truth.data = np.reshape(dat_truth, truth.data.shape)
+                trans_params = [bc_lambda, truth_mean, truth_sd, truth_std_min]
+
+                historic_forecast.data = ((historic_forecast.data - truth_mean) / truth_sd) - truth_std_min
+                if (historic_forecast.data < 0).any():
+                    shift = np.floor(np.min(historic_forecast.data))
+                    historic_forecast.data -= shift
+                    truth.data -= shift
+                    truth_std_min += shift
+                historic_forecast.data[historic_forecast.data == 0] = 0.00001
+                dat_truth = boxcox(historic_forecast.data.flatten(), lmbda=bc_lambda)
+                historic_forecast.data = np.reshape(dat_truth, historic_forecast.data.shape)
+            elif transform == "yeo_johnson":
+                print("Performing Yeo-Johnson transformation")
+                truth_mean = np.mean(truth.data)
+                truth_sd = np.std(truth.data)
+                truth.data = (truth.data - truth_mean) / truth_sd
+                dat_truth, yj_lambda = yeojohnson(truth.data.flatten())
+
+                truth.data = np.reshape(dat_truth, truth.data.shape)
+                trans_params = [yj_lambda, truth_mean, truth_sd]
+
+                historic_forecast.data = (historic_forecast.data - truth_mean) / truth_sd
+                dat_fcst = yeojohnson(historic_forecast.data.flatten(), lmbda=yj_lambda)
+                historic_forecast.data = np.reshape(dat_fcst, historic_forecast.data.shape)
+            elif transform == "yeo_johnson_standardised":
+                print("Performing Yeo-Johnson standardised transformation")
+                historic_forecast, truth, hf_mean, hf_sd, tr_mean, tr_sd = fo_standardise(historic_forecast, truth)
+                dat_truth, yj_lambda = yeojohnson(truth.data.flatten())
+                truth.data = np.reshape(dat_truth, truth.data.shape)
+                trans_params = [yj_lambda, hf_mean, hf_sd, tr_mean, tr_sd]
+                dat_fcst = yeojohnson(historic_forecast.data.flatten(), lmbda=yj_lambda)
+                historic_forecast.data = np.reshape(dat_fcst, historic_forecast.data.shape)
+            elif transform == "yeo_johnson_centre":
+                print("Performing Yeo-Johnson centre transformation")
+                historic_forecast, truth, hf_mean, tr_mean = fo_centre(historic_forecast, truth)
+                hf_sd = hf_mean.copy(data=np.reshape(np.repeat(1, hf_mean.data.size), hf_mean.shape))
+                tr_sd = hf_sd.copy()
+                dat_truth, yj_lambda = yeojohnson(truth.data.flatten())
+                truth.data = np.reshape(dat_truth, truth.data.shape)
+                trans_params = [yj_lambda, hf_mean, hf_sd, tr_mean, tr_sd]
+                dat_fcst = yeojohnson(historic_forecast.data.flatten(), lmbda=yj_lambda)
+                historic_forecast.data = np.reshape(dat_fcst, historic_forecast.data.shape)
+        print(trans_params)
+        print("Historic forecast cube shape = ", historic_forecast.shape)
         if reg_df is not None:
-            result = estimate_coefficients_from_regimes(
-                distribution, cycletime, desired_units=units,
-                predictor_of_mean_flag=predictor_of_mean,
-                max_iterations=max_iterations,
-                historic_forecast=historic_forecast, truth=truth,
-                landsea_mask=landsea_mask, reg_df=reg_df)
+            if distribution == "gaussian_lmm":
+                result = LinearMixedModelCoefficientEstimation(
+                    cycletime, desired_units=units,
+                    max_iterations=max_iterations).process(
+                    historic_forecast, truth, reg_df,
+                    landsea_mask=landsea_mask)
+            else:
+                result = estimate_coefficients_from_regimes(
+                    distribution, cycletime, desired_units=units,
+                    predictor_of_mean_flag=predictor_of_mean,
+                    max_iterations=max_iterations,
+                    historic_forecast=historic_forecast, truth=truth,
+                    landsea_mask=landsea_mask, reg_df=reg_df,
+                    val_time=val_time, sitespecific=sitespecific,
+                    standardise=standardise)
         else:
             result = EstimateCoefficientsForEnsembleCalibration(
                 distribution, cycletime, desired_units=units,
                 predictor_of_mean_flag=predictor_of_mean,
                 max_iterations=max_iterations).process(
-                    historic_forecast, truth, landsea_mask=landsea_mask)
-
+                    historic_forecast, truth, landsea_mask=landsea_mask,
+                    sitespecific=sitespecific,
+                    standardise=standardise, trans_params=trans_params,
+                    centre=centre)
     return result
 
 

@@ -63,8 +63,8 @@ WARNING_TYPES = [
 ]
 
 
-class Test_estimate_coefficients_from_regimes(SetupCubes, EnsembleCalibrationAssertions,
-                   SetupExpectedCoefficients):
+class TestEstimateCoefficientsFromRegimes(
+        SetupCubes, EnsembleCalibrationAssertions, SetupExpectedCoefficients):
 
     """Test the process method"""
 
@@ -91,15 +91,19 @@ class Test_estimate_coefficients_from_regimes(SetupCubes, EnsembleCalibrationAss
         desired_units = "K"
         predictor_of_mean_flag = "mean"
         max_iterations = 1000
-        data = np.array([[10, 11, 2017, 1],
-                         [11, 11, 2017, 1],
-                         [12, 11, 2017, 1],
-                         [13, 11, 2017, 1],
-                         [14, 11, 2017, 1]])
-        input_df = pd.DataFrame(data, index=range(5), columns=["day", "month", "year", "regime"])
+        data = np.array([[10, 11, 2017, 12, 1],
+                         [11, 11, 2017, 12, 1],
+                         [12, 11, 2017, 12, 1],
+                         [13, 11, 2017, 12, 1],
+                         [14, 11, 2017, 12, 1]])
+        input_df = pd.DataFrame(data, index=range(5),
+                                columns=["day", "month", "year",
+                                         "hour", "T0"])
         result = estimate_coefficients_from_regimes(
-            self.distribution, self.current_cycle, desired_units, predictor_of_mean_flag, max_iterations,
-            self.historic_temperature_forecast_cube, self.temperature_truth_cube, None, input_df)
+            self.distribution, self.current_cycle, desired_units,
+            predictor_of_mean_flag, max_iterations,
+            self.historic_temperature_forecast_cube,
+            self.temperature_truth_cube, None, input_df)
 
         self.assertEMOSCoefficientsAlmostEqual(
             result.data, self.expected_mean_predictor_gaussian)

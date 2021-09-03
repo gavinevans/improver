@@ -193,7 +193,8 @@ def spatial_coords_match(first_cube, second_cube):
             first_cube.coord(axis='y') == second_cube.coord(axis='y'))
 
 
-def time_coords_match(first_cube, second_cube, raise_exception=False, check_hour_only=False):
+def time_coords_match(first_cube, second_cube, raise_exception=False,
+                      check_hour_only=False):
     """
     Determine if two cubes have equivalent time, forecast_period, and
     forecast_reference_time points.
@@ -235,7 +236,8 @@ def time_coords_match(first_cube, second_cube, raise_exception=False, check_hour
                          (3600 * 24))):
                     mismatches.append(coord_name)
                     cubes_equivalent = False
-            elif (first_cube.coord(coord_name) != second_cube.coord(coord_name)):
+            elif (first_cube.coord(coord_name) !=
+                  second_cube.coord(coord_name)):
                 mismatches.append(coord_name)
                 cubes_equivalent = False
         except CoordinateNotFoundError:

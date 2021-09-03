@@ -37,11 +37,13 @@ import warnings
 
 import pandas as pd
 import numpy as np
+import iris
 from iris.exceptions import CoordinateNotFoundError
-
+from scipy.stats import boxcox, yeojohnson
 from improver.argparser import ArgParser
 from improver.ensemble_calibration.ensemble_calibration import (
-    ApplyCoefficientsFromEnsembleCalibration, apply_coefficients_from_regimes)
+    ApplyCoefficientsFromEnsembleCalibration, apply_coefficients_from_regimes,
+    LinearMixedModelCoefficientApplication)
 from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     EnsembleReordering,
     GeneratePercentilesFromMeanAndVariance,
@@ -52,6 +54,30 @@ from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
 from improver.metadata.probabilistic import find_percentile_coordinate
 from improver.utilities.load import load_cube
 from improver.utilities.save import save_netcdf
+from improver.metadata.amend import amend_metadata
+from improver.ensemble_calibration.ensemble_calibration_utilities import get_regime_probabilities
+
+def correct_metadata(cube):
+    attributes = {"um_version": "delete"}
+    coordinates = {"forecast_period": {"units": "seconds"},
+                   "time": {"units": "seconds since 1970-01-01 00:00:00"},
+                   "forecast_reference_time":
+                       {"units": "seconds since 1970-01-01 00:00:00"}}
+    cube = amend_metadata(cube, attributes=attributes,
+                          coordinates=coordinates)
+    cube.coord(axis="x").points = \
+        cube.coord(axis="x").points.astype(np.float32)
+    coordi_list = ["forecast_reference_time", "time"]
+    for coordi in coordi_list:
+        cube.coord(coordi).points = \
+            cube.coord(coordi).points.astype(np.int64)
+    cube.coord("height").points = \
+        cube.coord("height").points.astype(np.float32)
+    cube.coord("forecast_period").points = \
+        cube.coord("forecast_period").points.astype(np.int32)
+    cube.coord("realization").points = \
+        cube.coord("realization").points.astype(np.int32)
+    return cube
 
 
 def main(argv=None):
@@ -85,6 +111,17 @@ def main(argv=None):
     parser.add_argument(
         'output_filepath', metavar='OUTPUT_FILEPATH',
         help='The output path for the processed NetCDF')
+    parser.add_argument(
+        '--distribution', metavar='DISTRIBUTION',
+        default="gaussian",
+        choices=['gaussian', 'truncated_gaussian', 'gaussian_lmm', 'logistic', 't', 'skew_normal',
+                 'gamma', 'log_normal', 'truncated_logistic', 'generalized_logistic', 'normal_mixture_model',
+                 'trunc_normal_mixture_model'],
+        help='The distribution that will be used for '
+             'calibration. This will be dependent upon the '
+             'input phenomenon. This has to be supported by '
+             'the minimisation functions in '
+             'ContinuousRankedProbabilityScoreMinimisers.')
     # Optional arguments.
     parser.add_argument(
         '--num_realizations', metavar='NUMBER_OF_REALIZATIONS',
@@ -135,30 +172,139 @@ def main(argv=None):
         '--regime_filepath', default=None,
         help='Path to the input csv file containing historic '
              'regime occurrences.')
+    parser.add_argument(
+        '--val_time', default=False,
+        action='store_true',
+        help='Logical that is true if regime-dependent'
+             'post-processing is to use the regime predicted'
+             'by the ensemble members at the forecast '
+             'validation time, and false if the regime at'
+             'the initialisation time is to be used.')
+    parser.add_argument(
+        '--sitespecific', default=False,
+        action='store_true',
+        help='Logical that specifies whether or not EMOS '
+             'coefficients are to be estimated for each '
+             'grid point separately.')
+    parser.add_argument(
+        '--standardise', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+            'observations are to be standardised using local'
+            'means and standard deviations prior to '
+            'post-processing.')
+    parser.add_argument(
+        '--log_transform', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+             'observations are to be transformed back from' 
+             'the log scale after coefficients are applied.')
+    parser.add_argument(
+        '--sqrt_transform', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+             'observations are to be transformed back from' 
+             'the square-root scale after coefficients are applied.')
+    parser.add_argument(
+        '--boxcox_transform', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+             'observations are to be transformed back from' 
+             'the box-cox transformation after coefficients are applied.')
+    parser.add_argument(
+        '--yeojohnson_transform', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+             'observations are to be transformed back from' 
+             'the yeo-johnson transformation after coefficients are applied.')
+    parser.add_argument(
+        '--yeojohnson_transform_standardised', default=False,
+        action='store_true',
+        help='Logical that specifies whether forecasts and'
+             'observations are to be transformed back from' 
+             'the yeo-johnson transformation after coefficients are applied,'
+             'after standardising the forecasts using local data.')
 
     args = parser.parse_args(args=argv)
 
     # Load Cubes
     current_forecast = load_cube(args.forecast_filepath)
-    coeffs = load_cube(args.coefficients_filepath, allow_none=True)
+    current_forecast = correct_metadata(current_forecast)
+
+    coeffs = load_cube(args.coefficients_filepath)
 
     reg_df = None
     if args.regime_filepath:
-        reg_df = pd.read_csv(args.regime_filepath)
+        reg_df = pd.read_csv(args.regime_filepath, sep=" ", header=None)
+        reg_df.columns = ["year", "month", "day", "hour", "T0", "T24", "T48",
+                          "T72", "T96", "T120", "T144", "End"]
+
+    if args.log_transform:
+        print("Performing log transformation")
+        current_forecast.data[current_forecast.data == 0] = 0.00001
+        current_forecast.data = np.log(current_forecast.data)
+    elif args.sqrt_transform:
+        print("Performing square-root transformation")
+        current_forecast.data = np.sqrt(current_forecast.data)
+    elif args.boxcox_transform: # will only work for one set of parameters estimated over all data
+        print("Performing Box-Cox transformation")
+        bc_lambda = coeffs.data[coeffs.coord("coefficient_name").points == "lam_obs"].data[0]
+        truth_mean = coeffs.data[coeffs.coord("coefficient_name").points == "mean_obs"].data[0]
+        truth_sd = coeffs.data[coeffs.coord("coefficient_name").points == "sd_obs"].data[0]
+        truth_std_min = coeffs.data[coeffs.coord("coefficient_name").points == "std_min_obs"].data[0]
+        print("Lambda is ", bc_lambda)
+        current_forecast.data = ((current_forecast.data - truth_mean) / truth_sd) - truth_std_min
+        if (current_forecast.data < 0).any():
+            shift = np.floor(np.min(current_forecast.data))
+            current_forecast.data -= shift
+            truth_std_min += shift
+            coeffs.data[coeffs.coord("coefficient_name").points == "std_min_obs"].data[0] = truth_std_min
+        current_forecast.data[current_forecast.data == 0] = 0.00001
+        bc_data = boxcox(current_forecast.data.flatten(), lmbda=bc_lambda)
+        current_forecast.data = np.reshape(bc_data, current_forecast.data.shape)
+    elif args.yeojohnson_transform:
+        print("Performing Yeo-Johnson transformation")
+        yj_lambda = coeffs.data[coeffs.coord("coefficient_name").points == "lam_obs"].data[0]
+        truth_mean = coeffs.data[coeffs.coord("coefficient_name").points == "mean_obs"].data[0]
+        truth_sd = coeffs.data[coeffs.coord("coefficient_name").points == "sd_obs"].data[0]
+        print("Lambda is ", yj_lambda)
+        current_forecast.data = (current_forecast.data - truth_mean) / truth_sd
+        yj_data = yeojohnson(current_forecast.data.flatten(), lmbda=yj_lambda)
+        current_forecast.data = np.reshape(yj_data, current_forecast.data.shape)
+    elif args.yeojohnson_transform_standardised:
+        print("Performing Yeo-Johnson standardised transformation")
+        yj_lambda = coeffs[coeffs.coord("coefficient_name").points == "lam_obs"][0].data[0, 0]
+        fcst_mean = coeffs[coeffs.coord("coefficient_name").points == "fbar"][0]
+        fcst_sd = coeffs[coeffs.coord("coefficient_name").points == "fsig"][0]
+
+        current_forecast.data = (current_forecast.data - fcst_mean.data)/fcst_sd.data
+        print("Lambda is ", yj_lambda)
+        print("Fcst mean is ", fcst_mean)
+        print("Fcst sd is ", fcst_sd)
+        print(current_forecast)
+        yj_data = yeojohnson(current_forecast.data.flatten(), lmbda=yj_lambda)
+        current_forecast.data = np.reshape(yj_data, current_forecast.data.shape)
 
     # Process Cube
-    result = process(current_forecast, coeffs, args.num_realizations,
-                     args.random_ordering, args.random_seed,
-                     args.ecc_bounds_warning, args.predictor_of_mean,
-                     reg_df)
+    result = process(current_forecast, coeffs, args.distribution,
+                     args.num_realizations, args.random_ordering,
+                     args.random_seed, args.ecc_bounds_warning,
+                     args.predictor_of_mean, reg_df, args.val_time,
+                     args.sitespecific, args.standardise,
+                     args.log_transform, args.sqrt_transform,
+                     args.boxcox_transform, args.yeojohnson_transform,
+                     args.yeojohnson_transform_standardised)
     # Save Cube
     save_netcdf(result, args.output_filepath)
 
 
-def process(current_forecast, coeffs, num_realizations=None,
-            random_ordering=False, random_seed=None,
-            ecc_bounds_warning=False, predictor_of_mean='mean',
-            reg_df=None):
+def process(current_forecast, coeffs, distribution="gaussian",
+            num_realizations=None, random_ordering=False,
+            random_seed=None, ecc_bounds_warning=False,
+            predictor_of_mean='mean', reg_df=None, val_time=False,
+            sitespecific=False, standardise=False,
+            log_transform=False, sqrt_transform=False, boxcox_transform=False,
+            yeojohnson_transform=False, yeojohnson_transform_standardised=False):
     """Applying coefficients for Ensemble Model Output Statistics.
 
     Load in arguments for applying coefficients for Ensemble Model Output
@@ -175,6 +321,9 @@ def process(current_forecast, coeffs, num_realizations=None,
         coeffs (iris.cube.Cube or None):
             A cube containing the coefficients used for calibration or None.
             If none then then current_forecast is returned unchanged.
+        distribution (str):
+            The distribution that will be used for calibration. This will be
+            dependant upon the input phenomenon. Default is gaussian.
         num_realizations (numpy.int32):
             Optional argument to specify the number of ensemble realizations
             to produce. If the current forecast is input as probabilities or
@@ -210,10 +359,48 @@ def process(current_forecast, coeffs, num_realizations=None,
             mean. Currently the ensemble mean "mean" as the ensemble
             realization "realization" are supported as options.
             Default is 'mean'
+        distribution (str):
+            String to specify the predictive distribution with which to apply
+            EMOS. Must be one of "gaussian", "truncated_gaussian" or
+            "gaussian_lmm".
         reg_df (pandas.DataFrame):
             A data frame containing a series of past dates and the coinciding
              weather regimes.
-
+        val_time (bool):
+            Logical that is true if regime-dependent
+            post-processing is to use the regime predicted
+            by the ensemble members at the forecast
+            validation time, and false if the regime at
+            the initialisation time is to be used.
+        sitespecific (bool):
+            Logical that specifies whether or not EMOS coefficients are to
+            be estimated for each grid point separately.
+        standardise (bool):
+            Logical that specifies whether forecasts and
+            observations are to be standardised using local
+            means and standard deviations prior to
+            post-processing.
+        log_transform (bool):
+            Logical that specifies whether forecasts and
+            observations are to be transformed back from
+            the log scale after coefficients are applied.
+        sqrt_transform (bool):
+            Logical that specifies whether forecasts and
+            observations are to be transformed back from
+            the square-root scale after coefficients are applied.
+        boxcox_transform (bool):
+            Logical that specifies whether forecasts and
+            observations are to be transformed back from
+            the Box-Cox scale after coefficients are applied.
+        yeojohnson_transform (bool):
+            Logical that specifies whether forecasts and
+            observations are to be transformed back from
+            the Yeo-Johnson scale after coefficients are applied.
+        yeojohnson_transform_standardised (bool):
+            Logical that specifies whether forecasts and
+            observations are to be transformed back from
+            the Yeo-Johnson scale after coefficients are applied,
+            with local standardisation.
     Returns:
         result (iris.cube.Cube):
             The calibrated forecast cube.
@@ -288,14 +475,43 @@ def process(current_forecast, coeffs, num_realizations=None,
 
     # Apply coefficients as part of Ensemble Model Output Statistics (EMOS).
     if reg_df is not None:
-        ac = apply_coefficients_from_regimes(
-            current_forecast, coeffs,
-            predictor_of_mean_flag=predictor_of_mean, reg_df=reg_df)
+        if distribution == "gaussian_lmm":
+            ac = LinearMixedModelCoefficientApplication()
+            calibrated_predictor, calibrated_variance = ac.process(
+                current_forecast, coeffs,
+                reg_df=reg_df, val_time=val_time,
+                standardise=standardise)
+        else:
+            calibrated_predictor, calibrated_variance = \
+                apply_coefficients_from_regimes(
+                    current_forecast, coeffs,
+                    predictor_of_mean_flag=predictor_of_mean,
+                    reg_df=reg_df, val_time=val_time,
+                    sitespecific=sitespecific,
+                    standardise=standardise)
+    elif distribution == "trunc_normal_mixture_model" or distribution == "normal_mixture_model":
+        n_reg = len(coeffs.coord("regime").points)
+        ac = ApplyCoefficientsFromEnsembleCalibration(
+            predictor_of_mean_flag=predictor_of_mean)
+        calibrated_predictor = []
+        calibrated_variance = []
+        for i in range(n_reg):
+            calibrated_predictor_i, calibrated_variance_i = ac.process(
+                current_forecast, coeffs[i], sitespecific=sitespecific,
+                standardise=standardise)
+            calibrated_predictor.append(calibrated_predictor_i)
+            calibrated_variance.append(calibrated_variance_i)
     else:
+        if yeojohnson_transform_standardised:
+            yj_lambda = coeffs[coeffs.coord("coefficient_name").points == "lam_obs"][0].data[0, 0]
+            obs_mean = coeffs[coeffs.coord("coefficient_name").points == "ybar"][0]
+            obs_sd = coeffs[coeffs.coord("coefficient_name").points == "ysig"][0]
+            coeffs = coeffs[:4, 0, 0]
         ac = ApplyCoefficientsFromEnsembleCalibration(
             predictor_of_mean_flag=predictor_of_mean)
         calibrated_predictor, calibrated_variance = ac.process(
-            current_forecast, coeffs)
+            current_forecast, coeffs, sitespecific=sitespecific,
+            standardise=standardise)
 
     # If input forecast is probabilities, convert output into probabilities.
     # If input forecast is percentiles, convert output into percentiles.
@@ -312,12 +528,74 @@ def process(current_forecast, coeffs, num_realizations=None,
     elif input_forecast_type == "realizations":
         # Ensemble Copula Coupling to generate realizations
         # from mean and variance.
+        if (distribution == "t") or (distribution == "skew_normal"):
+            extra_params = coeffs.data[-1]
+        elif distribution == "generalized_logistic":
+            if standardise:
+                extra_params = coeffs[coeffs.coord("coefficient_name").points == "shape"][0].data[0, 0]**2
+            else:
+                extra_params = coeffs.data[-1]**2
+        elif distribution == "trunc_normal_mixture_model" or distribution == "normal_mixture_model":
+            extra_params = get_regime_probabilities(current_forecast)[0]
+        else:
+            extra_params = None
         percentiles = GeneratePercentilesFromMeanAndVariance().process(
             calibrated_predictor, calibrated_variance,
-            no_of_percentiles=num_realizations)
+            no_of_percentiles=num_realizations, distribution=distribution,
+            extra_coeff=extra_params)
         result = EnsembleReordering().process(
             percentiles, current_forecast,
             random_ordering=random_ordering, random_seed=random_seed)
+        if log_transform:
+            result.data = np.exp(result.data)
+        elif sqrt_transform:
+            result.data = result.data ** 2
+        elif boxcox_transform:
+            bc_lambda = coeffs.data[coeffs.coord("coefficient_name").points == "lam_obs"].data[0]
+            truth_mean = coeffs.data[coeffs.coord("coefficient_name").points == "mean_obs"].data[0]
+            truth_sd = coeffs.data[coeffs.coord("coefficient_name").points == "sd_obs"].data[0]
+            truth_std_min = coeffs.data[coeffs.coord("coefficient_name").points == "std_min_obs"].data[0]
+            print("Lambda is ", bc_lambda)
+            if bc_lambda == 0:
+                bc_data = np.exp(result.data.flatten())
+            else:
+                bc_data = (bc_lambda*result.data.flatten() + 1) ** (1/bc_lambda)
+            bc_data = (bc_data + truth_std_min)*truth_sd + truth_mean
+            result.data = np.reshape(bc_data, result.data.shape)
+        elif yeojohnson_transform:
+            yj_lambda = coeffs.data[coeffs.coord("coefficient_name").points == "lam_obs"].data[0]
+            truth_mean = coeffs.data[coeffs.coord("coefficient_name").points == "mean_obs"].data[0]
+            truth_sd = coeffs.data[coeffs.coord("coefficient_name").points == "sd_obs"].data[0]
+            print("Lambda is ", yj_lambda)
+            result_data = result.data.flatten()
+            result_data_neg = result_data[result_data < 0]
+            result_data_pos = result_data[result_data >= 0]
+            yj_data = result_data.copy()
+            yj_data[result_data < 0] = 1 - (1 - (2 - yj_lambda)*result_data_neg) ** (1/(2 - yj_lambda))
+            yj_data[result_data >= 0] = ((yj_lambda*result_data_pos + 1) ** (1/yj_lambda)) - 1
+            if yj_lambda == 0:
+                yj_data[result_data >= 0] = np.exp(result_data_pos) - 1
+            elif yj_lambda == 2:
+                yj_data[result_data < 0] = 1 - np.exp(-result_data_neg)
+            yj_data = yj_data*truth_sd + truth_mean
+            result.data = np.reshape(yj_data, result.data.shape)
+        elif yeojohnson_transform_standardised:
+            print("Lambda is ", yj_lambda)
+            result_data = result.data.flatten()
+            result_data_neg = result_data[result_data < 0]
+            result_data_pos = result_data[result_data >= 0]
+            yj_data = result_data.copy()
+            yj_data[result_data < 0] = 1 - (1 - (2 - yj_lambda)*result_data_neg) ** (1/(2 - yj_lambda))
+            yj_data[result_data >= 0] = ((yj_lambda*result_data_pos + 1) ** (1/yj_lambda)) - 1
+            if yj_lambda == 0:
+                yj_data[result_data >= 0] = np.exp(result_data_pos) - 1
+            elif yj_lambda == 2:
+                yj_data[result_data < 0] = 1 - np.exp(-result_data_neg)
+            obs_sd_data = np.repeat(obs_sd.data[np.newaxis, :, :], result.data.shape[0]).flatten()
+            obs_mean_data = np.repeat(obs_mean.data[np.newaxis, :, :], result.data.shape[0]).flatten()
+            print(obs_sd_data.shape)
+            yj_data = yj_data*obs_sd_data + obs_mean_data
+            result.data = np.reshape(yj_data, result.data.shape)
     return result
 
 

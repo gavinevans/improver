@@ -37,7 +37,7 @@ import warnings
 import iris
 import numpy as np
 from iris.exceptions import CoordinateNotFoundError, InvalidCubeError
-from scipy.stats import norm
+from scipy.stats import norm, truncnorm, logistic, t, skewnorm, gamma, lognorm, genlogistic
 
 from improver.ensemble_calibration.ensemble_calibration_utilities import (
     convert_cube_data_to_2d)
@@ -637,7 +637,7 @@ class GeneratePercentilesFromMeanAndVariance(object):
     @staticmethod
     def _mean_and_variance_to_percentiles(
             calibrated_forecast_predictor, calibrated_forecast_variance,
-            percentiles):
+            percentiles, distribution="gaussian", extra_coeff=None):
         """
         Function returning percentiles based on the supplied
         mean and variance. The percentiles are created by assuming a
@@ -652,6 +652,12 @@ class GeneratePercentilesFromMeanAndVariance(object):
             percentiles (list):
                 Percentiles at which to calculate the value of the phenomenon
                 at.
+            distribution:
+                Distribution from which to obtain percentiles. Either gaussian or
+                truncated_gaussian.
+            extra_coeff:
+                An additional coefficient that may be required for particular
+                choices of distribution. e.g. shape for skew_normal and df for t.
 
         Returns:
             percentile_cube (iris.cube.Cube):
@@ -662,17 +668,33 @@ class GeneratePercentilesFromMeanAndVariance(object):
             ValueError: If any of the resulting percentile values are
                 nans and these nans are not caused by a zero variance.
         """
-        calibrated_forecast_predictor = (
-            enforce_coordinate_ordering(
-                calibrated_forecast_predictor, "realization"))
-        calibrated_forecast_variance = (
-            enforce_coordinate_ordering(
-                calibrated_forecast_variance, "realization"))
 
-        calibrated_forecast_predictor_data = (
-            calibrated_forecast_predictor.data.flatten())
-        calibrated_forecast_variance_data = (
-            calibrated_forecast_variance.data.flatten())
+        if distribution == "normal_mixture_model" or distribution == "trunc_normal_mixture_model":
+            locs = len(calibrated_forecast_predictor.data.flatten())
+            calibrated_forecast_predictor_data = np.empty((locs, len(calibrated_forecast_predictor)))
+            calibrated_forecast_variance_data = np.empty((locs, len(calibrated_forecast_predictor)))
+
+            for i in range(len(calibrated_forecast_predictor)):
+                calibrated_forecast_predictor[i] = (enforce_coordinate_ordering(
+                    calibrated_forecast_predictor[i], "realization"))
+                calibrated_forecast_variance[i] = (enforce_coordinate_ordering(
+                        calibrated_forecast_variance[i], "realization"))
+
+                calibrated_forecast_predictor_data[:, i] = (calibrated_forecast_predictor[i].data.flatten())
+                calibrated_forecast_variance_data[:, i] = (calibrated_forecast_variance[i].data.flatten())
+
+        else:
+            calibrated_forecast_predictor = (
+                enforce_coordinate_ordering(
+                    calibrated_forecast_predictor, "realization"))
+            calibrated_forecast_variance = (
+                enforce_coordinate_ordering(
+                    calibrated_forecast_variance, "realization"))
+
+            calibrated_forecast_predictor_data = (
+                calibrated_forecast_predictor.data.flatten())
+            calibrated_forecast_variance_data = (
+                calibrated_forecast_variance.data.flatten())
 
         # Convert percentiles into fractions.
         percentiles = np.array(
@@ -687,22 +709,93 @@ class GeneratePercentilesFromMeanAndVariance(object):
         for index, percentile in enumerate(percentiles):
             percentile_list = np.repeat(
                 percentile, len(calibrated_forecast_predictor_data))
-            result[index, :] = norm.ppf(
-                percentile_list, loc=calibrated_forecast_predictor_data,
-                scale=np.sqrt(calibrated_forecast_variance_data))
+            if distribution == "truncated_gaussian":
+                a_new = (0 - calibrated_forecast_predictor_data) / np.sqrt(calibrated_forecast_variance_data)
+                result[index, :] = truncnorm.ppf(
+                    percentile_list, a=a_new, b=np.inf, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            elif distribution == "logistic":
+                result[index, :] = logistic.ppf(
+                    percentile_list, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            elif distribution == "t":
+                result[index, :] = t.ppf(
+                    percentile_list, df=extra_coeff, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            elif distribution == "skew_normal":
+                result[index, :] = skewnorm.ppf(
+                    percentile_list, a=extra_coeff, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            elif distribution == "generalized_logistic":
+                result[index, :] = genlogistic.ppf(
+                    percentile_list, c=extra_coeff, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            elif distribution == "log_normal":
+                sigma_ln = np.sqrt(np.log(1 + calibrated_forecast_variance_data /
+                                          (calibrated_forecast_predictor_data ** 2)))
+                mu_ln = np.log((calibrated_forecast_predictor_data ** 2) /
+                               np.sqrt(calibrated_forecast_variance_data + calibrated_forecast_predictor_data ** 2))
+                result[index, :] = lognorm.ppf(percentile_list, s=sigma_ln, scale=np.exp(mu_ln))
+            elif distribution == "truncated_logistic":
+                ''' Scheuerer & Moeller 2015 gives the quantile function for a truncated logistic distribution'''
+                eta = np.sqrt(3) * np.sqrt(calibrated_forecast_variance_data) / np.pi
+                p0 = logistic.cdf(0, loc=calibrated_forecast_predictor_data, scale=eta)
+                logit = np.log(p0 + percentile_list*(1 - p0)) - np.log(1 - (p0 + percentile_list*(1 - p0)))
+                result[index, :] = calibrated_forecast_predictor_data + eta*logit
+            elif distribution == "gamma":
+                cal_shape = (calibrated_forecast_predictor_data ** 2) / calibrated_forecast_variance_data
+                cal_rate = calibrated_forecast_predictor_data / calibrated_forecast_variance_data
+                result[index, :] = gamma.ppf(percentile_list, a=cal_shape, scale=1 / cal_rate)
+            elif distribution == "normal_mixture_model":
+                lb = max(min(calibrated_forecast_predictor_data) - 4*np.sqrt(max(calibrated_forecast_variance_data)), 0)
+                ub = max(calibrated_forecast_predictor_data) + 4*np.sqrt(max(calibrated_forecast_variance_data))
+                incr = (ub - lb)/0.025
+                vec = lb + 0.025*np.arange(1, incr)
+                n_reg = len(extra_coeff)
+                quants = [vec[np.sum(np.sum(np.array([extra_coeff[i] * norm.cdf(vec, loc=
+                calibrated_forecast_predictor_data[j, i], scale=np.sqrt(calibrated_forecast_variance_data[j, i]))
+                                                               for i in range(n_reg)]), axis=0) < percentile)]
+                                   for j in range(calibrated_forecast_predictor_data.shape[0])]
+                result[index, :] = np.array(quants)
+            elif distribution == "trunc_normal_mixture_model":
+                lb = max(min(calibrated_forecast_predictor_data) - 4*np.sqrt(max(calibrated_forecast_variance_data)), 0)
+                ub = max(calibrated_forecast_predictor_data) + 4*np.sqrt(max(calibrated_forecast_variance_data))
+                incr = (ub - lb)/0.025
+                vec = lb + 0.025*np.arange(1, incr)
+                n_reg = len(extra_coeff)
+                quants = [vec[np.sum(np.sum(np.array([extra_coeff[i] * truncnorm.cdf(vec, a=
+                (0 - calibrated_forecast_predictor_data[j, i]) / np.sqrt(calibrated_forecast_variance_data[j, i]), b=
+                np.inf, loc=calibrated_forecast_predictor_data[j, i], scale=
+                np.sqrt(calibrated_forecast_variance_data[j, i])) for i in range(n_reg)]), axis=0) < percentile)]
+                          for j in range(calibrated_forecast_predictor_data.shape[0])]
+                result[index, :] = np.array(quants)
+            elif distribution == "gaussian":
+                result[index, :] = norm.ppf(
+                    percentile_list, loc=calibrated_forecast_predictor_data,
+                    scale=np.sqrt(calibrated_forecast_variance_data))
+            print("Distribution is ", distribution)
+            print(result[:, 0])
+
             # If percent point function (PPF) returns NaNs, fill in
             # mean instead of NaN values. NaN will only be generated if the
             # variance is zero. Therefore, if the variance is zero, the mean
             # value is used for all gridpoints with a NaN.
             if np.any(calibrated_forecast_variance_data == 0):
                 nan_index = np.argwhere(np.isnan(result[index, :]))
-                result[index, nan_index] = (
-                    calibrated_forecast_predictor_data[nan_index])
+                if distribution == "trunc_normal_mixture_model" or distribution == "normal_mixture_model":
+                    result[index, nan_index] = (
+                        np.mean(calibrated_forecast_predictor_data[nan_index, :]))
+                else:
+                    result[index, nan_index] = (
+                        calibrated_forecast_predictor_data[nan_index])
             if np.any(np.isnan(result)):
                 msg = ("NaNs are present within the result for the {} "
                        "percentile. Unable to calculate the percent point "
                        "function.")
                 raise ValueError(msg)
+
+        if distribution == "trunc_normal_mixture_model" or distribution == "normal_mixture_model":
+            calibrated_forecast_predictor = calibrated_forecast_predictor[0]
 
         # Convert percentiles back into percentages.
         percentiles = [x*100.0 for x in percentiles]
@@ -727,7 +820,7 @@ class GeneratePercentilesFromMeanAndVariance(object):
 
     def process(self, calibrated_forecast_predictor,
                 calibrated_forecast_variance, no_of_percentiles=None,
-                percentiles=None):
+                percentiles=None, distribution="gaussian", extra_coeff=None):
         """
         Generate ensemble percentiles from the mean and variance.
 
@@ -767,7 +860,7 @@ class GeneratePercentilesFromMeanAndVariance(object):
             self._mean_and_variance_to_percentiles(
                 calibrated_forecast_predictor,
                 calibrated_forecast_variance,
-                percentiles))
+                percentiles, distribution, extra_coeff))
 
         return calibrated_forecast_percentiles
 

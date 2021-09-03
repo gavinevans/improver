@@ -315,13 +315,16 @@ class Test_extract_regimes(IrisTest):
         expected_data = [[PartialDateTime(2018, 1, 1), 1],
                          [PartialDateTime(2018, 1, 2), 1],
                          [PartialDateTime(2018, 1, 3), 2]]
-        expected_df = pd.DataFrame(expected_data, index=range(3), columns=["date", "regime"])
-        data = np.array([[1, 1, 2018, 1],
-                         [2, 1, 2018, 1],
-                         [3, 1, 2018, 2]])
-        input_df = pd.DataFrame(data, index=range(3), columns=["day", "month", "year", "regime"])
-        init_date = datetime.datetime(2018, 1, 1)
-        final_date = datetime.datetime(2018, 1, 3)
+        expected_df = pd.DataFrame(expected_data, index=range(3),
+                                   columns=["date", "regime"])
+        data = np.array([[1, 1, 2018, 12, 1],
+                         [2, 1, 2018, 12, 1],
+                         [3, 1, 2018, 12, 2]])
+        input_df = pd.DataFrame(data, index=range(3),
+                                columns=["day", "month", "year",
+                                         "hour", "T0"])
+        init_date = datetime.datetime(2018, 1, 1, 3)
+        final_date = datetime.datetime(2018, 1, 3, 3)
         result = extract_regimes(input_df, init_date, final_date)
         assert_frame_equal(result, expected_df)
 
