@@ -62,7 +62,6 @@ class EnsembleCalibrationAssertions(IrisTest):
         justified based on the default tolerance of the minimisation using the
         Nelder-Mead algorithm of 0.0001, so that minimisations on different
         machines would only be aiming to match to 4 decimal places.
-
         Args:
             first (numpy.ndarray):
                 First array to compare.
@@ -230,6 +229,20 @@ class SetupCubes(IrisTest):
         self.truth_spot_cube.remove_coord("realization")
         self.truth_spot_cube.data = self.truth_spot_cube.data + 1.0
 
+        self.spot_altitude_cube = forecast_spot_cube[0, 0].copy(
+            forecast_spot_cube.coord("altitude").points
+        )
+        self.spot_altitude_cube.rename("altitude")
+        self.spot_altitude_cube.units = "m"
+        for coord in [
+            "altitude",
+            "forecast_period",
+            "forecast_reference_time",
+            "realization",
+            "time",
+        ]:
+            self.spot_altitude_cube.remove_coord(coord)
+
 
 def _create_historic_forecasts(
     data, time_dt, frt_dt, standard_grid_metadata="uk_ens", number_of_days=5, **kwargs
@@ -238,10 +251,8 @@ def _create_historic_forecasts(
     Function to create a cubelist of historic forecasts, based on the inputs
     provided, and assuming that there will be one forecast per day at the
     same hour of the day.
-
     Please see improver.tests.set_up_test_cubes.set_up_variable_cube for the
     supported keyword arguments.
-
     Args:
         data (numpy.ndarray):
             Numpy array to define the data that will be used to fill the cube.
@@ -259,7 +270,6 @@ def _create_historic_forecasts(
         number_of_days(int):
             Number of days to increment when constructing a cubelist of the
             historic forecasts.
-
     Returns:
         iris.cube.CubeList:
             Cubelist of historic forecasts in one day increments.
@@ -284,10 +294,8 @@ def _create_truth(data, time_dt, number_of_days=5, **kwargs):
     """
     Function to create truth cubes, based on the input cube, and assuming that
     there will be one forecast per day at the same hour of the day.
-
     Please see improver.tests.set_up_test_cubes.set_up_variable_cube for the
     other supported keyword arguments.
-
     Args:
         data (numpy.ndarray):
             Numpy array to define the data that will be used to fill the cube.

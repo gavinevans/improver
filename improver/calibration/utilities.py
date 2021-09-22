@@ -31,14 +31,13 @@
 """
 This module defines all the utilities used by the "plugins"
 specific for ensemble calibration.
-
 """
-from typing import Set, Tuple, Union
+from typing import Callable, List, Optional, Set, Tuple, Union
 
 import iris
 import numpy as np
 from iris.coords import DimCoord
-from iris.cube import Cube
+from iris.cube import Cube, CubeList
 from numpy import ndarray
 from numpy.ma.core import MaskedArray
 
@@ -51,7 +50,6 @@ def convert_cube_data_to_2d(
     """
     Function to convert data from a N-dimensional cube into a 2d
     numpy array. The result can be transposed, if required.
-
     Args:
         forecast:
             N-dimensional cube to be reshaped.
@@ -63,7 +61,6 @@ def convert_cube_data_to_2d(
             This will transpose a 2d array of the format [coord, :]
             to [:, coord].  If coord is not a dimension on the input cube,
             the resulting array will be 2d with items of length 1.
-
     Returns:
         Reshaped 2d array.
     """
@@ -79,32 +76,31 @@ def convert_cube_data_to_2d(
 
 
 def flatten_ignoring_masked_data(
-    data_array: Union[MaskedArray, ndarray], preserve_leading_dimension: bool = False
+    data_array: Union[MaskedArray, ndarray],
+    num_of_leading_dimensions_to_preserve: Optional[int] = 0,
 ) -> ndarray:
     """
     Flatten an array, selecting only valid data if the array is masked. There
-    is also the option to reshape the resulting array so it has the same
-    leading dimension as the input array, but the other dimensions of the
-    array are flattened. It is assumed that each of the slices
-    along the leading dimension are masked in the same way. This functionality
-    is used in EstimateCoefficientsForEnsembleCalibration when realizations
-    are used as predictors.
-
+    is also the option to reshape the resulting array so that the requested
+    number of leading dimensions are flattened along the first dimension with
+    other non-leading dimensions flattened along the second dimension.
+    It is assumed that each of the slices along the leading dimension are
+    masked in the same way. This functionality is used in
+    EstimateCoefficientsForEnsembleCalibration when realizations are used
+    as predictors.
     Args:
         data_array:
             An array or masked array to be flattened. If it is masked and the
             leading dimension is preserved the mask must be the same for every
             slice along the leading dimension.
-        preserve_leading_dimension:
-            Default False.
-            If True the flattened array is reshaped so it has the same leading
-            dimension as the input array. If False the returned array is 1D.
-
+        num_of_leading_dimensions_to_preserve:
+            Default zero. A positive non-zero integer represents the number
+            of leading dimensions to flatten into the first dimension with
+            other non-leading dimensions flattened along the second dimension.
+            If this is zero, a 1D flattened array is returned.
     Returns:
         A flattened array containing only valid data. Either 1D or, if
-        preserving the leading dimension 2D. In the latter case the
-        leading dimension is the same as the input data_array.
-
+        preserving the leading dimensions, 2D.
     Raises:
         ValueError: If preserving the leading dimension and the mask on the
                     input array is not the same for every slice along the
@@ -128,10 +124,11 @@ def flatten_ignoring_masked_data(
         result = data_array[~data_array.mask]
     else:
         result = data_array.flatten()
-    if preserve_leading_dimension:
-        # Reshape back to give the same leading dimension in the array. The 2nd
-        # dimension is inferred through the use of -1.
-        final_shape = (data_array.shape[0], -1)
+    if num_of_leading_dimensions_to_preserve:
+        final_shape = (
+            np.prod(data_array.shape[:num_of_leading_dimensions_to_preserve]),
+            -1,
+        )
         result = result.reshape(final_shape)
     return result
 
@@ -141,14 +138,12 @@ def check_predictor(predictor: str) -> None:
     Check the predictor at the start of the process methods in relevant
     ensemble calibration plugins, to avoid having to check and raise an error
     later.
-
     Args:
         predictor:
             String to specify the form of the predictor used to calculate
             the location parameter when estimating the EMOS coefficients.
             Currently the ensemble mean ("mean") and the ensemble
             realizations ("realizations") are supported as the predictors.
-
     Raises:
         ValueError: If the predictor is not valid.
     """
@@ -167,7 +162,6 @@ def filter_non_matching_cubes(
     Provide filtering for the historic forecast and truth to make sure
     that these contain matching validity times. This ensures that any
     mismatch between the historic forecasts and truth is dealt with.
-
     Args:
         historic_forecast:
             Cube of historic forecasts that potentially contains
@@ -175,13 +169,11 @@ def filter_non_matching_cubes(
         truth:
             Cube of truth that potentially contains a mismatch
             compared to the historic forecasts.
-
     Returns:
         - Cube of historic forecasts where any mismatches with
           the truth cube have been removed.
         - Cube of truths where any mismatches with
           the historic_forecasts cube have been removed.
-
     Raises:
         ValueError: The filtering has found no matches in validity time
             between the historic forecasts and the truths.
@@ -229,12 +221,10 @@ def create_unified_frt_coord(forecast_reference_time: DimCoord) -> DimCoord:
     coordinate. The new coordinate records the maximum range of bounds of
     the input forecast reference times, with the point value set to the latest
     of those in the inputs.
-
     Args:
         forecast_reference_time:
             The forecast_reference_time coordinate to be used in the
             coordinate creation.
-
     Returns:
         A dimension coordinate containing the forecast reference time
         coordinate with suitable bounds. The coordinate point is that
@@ -255,7 +245,6 @@ def merge_land_and_sea(calibrated_land_only: Cube, uncalibrated: Cube) -> None:
     Merge data that has been calibrated over the land with uncalibrated data.
     Calibrated data will have masked data over the sea which will need to be
     filled with the uncalibrated data.
-
     Args:
         calibrated_land_only:
             A cube that has been calibrated over the land, with sea points
@@ -265,7 +254,6 @@ def merge_land_and_sea(calibrated_land_only: Cube, uncalibrated: Cube) -> None:
             A cube of uncalibrated data with valid data over the sea. Either
             realizations, probabilities or percentiles. Dimension coordinates
             must be the same as the calibrated_land_only cube.
-
     Raises:
         ValueError: If input cubes do not have the same input dimensions.
     """
@@ -287,13 +275,11 @@ def forecast_coords_match(first_cube: Cube, second_cube: Cube) -> None:
     of the forecast_reference_time coordinates match. Only the point of the
     forecast reference time coordinate is checked to ensure that a calibration
     / coefficient cube matches the forecast cube, as appropriate.
-
     Args:
         first_cube:
             First cube to compare.
         second_cube:
             Second cube to compare.
-
     Raises:
         ValueError: The two cubes are not equivalent.
     """
@@ -314,11 +300,9 @@ def get_frt_hours(forecast_reference_time: DimCoord) -> Set[int]:
     """
     Returns a set of integer representations of the hour of the
     forecast reference time.
-
     Args:
         forecast_reference_time:
             The forecast_reference_time coordinate to extract the hours from.
-
     Returns:
         A set of integer representations of the forecast reference time
         hours.
@@ -333,10 +317,8 @@ def check_forecast_consistency(forecasts: Cube) -> None:
     """
     Checks that the forecast cubes have a consistent forecast reference time
     hour and a consistent forecast period.
-
     Args:
         forecasts:
-
     Raises:
         ValueError: Forecast cubes have differing forecast reference time hours
         ValueError: Forecast cubes have differing forecast periods
@@ -352,3 +334,37 @@ def check_forecast_consistency(forecasts: Cube) -> None:
     if len(forecasts.coord("forecast_period").points) != 1:
         msg = "Forecasts have been provided with differing forecast periods {}"
         raise ValueError(msg.format(forecasts.coord("forecast_period").points))
+
+
+def reshape_forecast_predictors(
+    forecast_predictors: CubeList,
+    constr: Optional[iris.Constraint] = None,
+    func: Optional[Callable] = lambda x: x,
+) -> List[ndarray]:
+    """Reshape forecast predictors without a time by broadcasting to the required shape.
+    Args:
+        forecast_predictors:
+            The forecast predictors to be reshaped.
+        constr:
+            A constraint for selecting the required forecast predictor.
+    Returns:
+       Consistently-shaped forecast predictors where static forecast predictors
+       have been reshaped to account for a time dimensions.
+    """
+    reshaped_forecast_predictors = []
+    num_times = [
+        len(fp_cube.coord("time").points)
+        for fp_cube in forecast_predictors
+        if fp_cube.coords("time", dim_coords=True)
+    ]
+    for fp_cube in forecast_predictors:
+        if constr:
+            fp_cube = fp_cube.extract(constr)
+
+        fp_data = fp_cube.data
+        if not fp_cube.coords("time"):
+            # Broadcast static predictors to the required shape.
+            fp_data = np.broadcast_to(fp_data, tuple(num_times) + fp_data.shape)
+
+        reshaped_forecast_predictors.append(func(fp_data))
+    return reshaped_forecast_predictors
