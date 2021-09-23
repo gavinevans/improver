@@ -31,13 +31,19 @@
 """init for calibration"""
 
 from collections import OrderedDict
+from datetime import timedelta
+from improver.utilities.temporal import cycletime_to_datetime
 from typing import List, Optional, Tuple
 
+import iris
+import numpy as np
+import pandas as pd
 from iris.cube import Cube
 
 from improver.metadata.probabilistic import (
     get_diagnostic_cube_name_from_probability_name,
 )
+from improver.metadata.constants.time_types import TIME_COORDS
 from improver.utilities.cube_manipulation import MergeCubes
 
 
@@ -116,3 +122,97 @@ def split_forecasts_and_truth(
     forecast = MergeCubes()(grouped_cubes["historical forecast"])
 
     return forecast, truth, land_sea_mask
+
+
+def load_parquet(filepath, filters=None) -> pd.DataFrame:
+    df = pd.read_parquet(filepath, filters=filters)
+    if df.empty:
+        msg = (f"The requested filepath {filepath} does not contain the "
+               f"requested contents: {filters}")
+        raise IOError(msg)
+    return df
+
+
+def forecast_table_to_cube(filepath, diagnostic, cycletime: str,
+        forecast_period: int, training_length: int) -> Cube:
+    """Convert a forecast table into an iris Cube.
+
+    Args:
+        filepath:
+            Path to a parquet file containing forecasts.
+        diagnostic:
+            The name of the diagnostic. This diagnostic must be available
+            within the diag column within the forecast table.
+
+    Returns:
+
+    """
+    table = load_parquet(filepath, filters=[("diag", "==", diagnostic)])
+    forecast_period_td = timedelta(forecast_period)
+    validity_time = cycletime_to_datetime(cycletime) + forecast_period_td
+
+    date_range = pd.date_range(end=validity_time-timedelta(day=1), periods=training_length, freq="D")
+
+    #cube = pd.to_xarray(table).to_iris()
+
+    for adate in date_range:
+        table = table.loc[(table["time"] == adate) &
+                          (table["forecast_period"] == forecast_period_td)]
+
+
+        # Filter WMO IDs as only want IDs in truth table.
+        time_coord = iris.coords.DimCoord(
+            table["time"].unique(),
+            "time",
+            bounds=table["time_bounds"],
+            units=TIME_COORDS["time"].units,
+        )
+        fp_coord = iris.coords.AuxCoord(
+            table["forecast_period"].unique(),
+            "forecast_period",
+            bounds=table["forecast_period_bounds"],
+            units=TIME_COORDS["time"].units,
+        )
+        frt_coord = iris.coords.AuxCoord(
+            table["forecast_reference_time"],
+            "forecast_reference_time",
+            bounds=table["forecast_reference_time_bounds"],
+            units=TIME_COORDS["time"].units,
+        )
+        for percentile in table["percentile"].unique():
+            perc_coord = iris.coords.DimCoord(
+                percentile, "percentile", units=1
+            )
+
+        forecast_cube = build_spotdata_cube(
+            table["fc"].astype(np.float32),  # data
+            table["cf_name"].unique(),
+            table["units"].unique(),
+            table["altitude"].astype(np.float32),  # altitude
+            table["latitude"].astype(np.float32),  # latitude
+            table["longitude"].astype(np.float32),  # longitude
+            table["wmo_id"].unique(),
+            additional_dims=time_coord + perc_coord,
+        )
+        forecast_cube.add_aux_coord(
+            (frt_coord, forecast_cube.coord("time").ndim),
+            (fp_coord, forecast_cube.coord("time").ndim),
+        )
+
+    forecast_cube = RebadgePercentilesAsRealizations()(forecast_cube)
+
+    plugin = EstimateCoefficientsForEnsembleCalibration(
+        distribution,
+        point_by_point=point_by_point,
+        use_default_initial_guess=use_default_initial_guess,
+        desired_units=units,
+        predictor=predictor,
+        tolerance=tolerance,
+        max_iterations=max_iterations,
+    )
+    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+
+
+def truth_table_to_cube(filepath, diagnostic):
+
+    truth_table = pd.read_parquet(truth, filters=[("diag", "==", {diagnostic})])
