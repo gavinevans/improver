@@ -12,7 +12,6 @@ dependencies:
   - cf-units=2.1.5
   - clize
   - dask
-  - fastparquet
   - iris=3.0
   - netCDF4
   - numpy<1.21
@@ -24,6 +23,7 @@ dependencies:
   - sigtools
   - sphinx
   # Optional
+  - fastparquet
   - numba
   - pysteps=1.4.1
   - statsmodels
