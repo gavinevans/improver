@@ -164,7 +164,9 @@ def load_parquet(filepath: str, filters: Optional[List] = None) -> pd.DataFrame:
     """
     df = pd.read_parquet(filepath, filters=filters)
     if df.empty:
-        msg = (f"The requested filepath {filepath} does not contain the "
-               f"requested contents: {filters}")
+        msg = (
+            f"The requested filepath {filepath} does not contain the "
+            f"requested contents: {filters}"
+        )
         raise IOError(msg)
     return df

@@ -37,7 +37,6 @@ from tempfile import mkdtemp
 
 import iris
 import numpy as np
-from numpy.core.fromnumeric import partition
 import pandas as pd
 from iris.tests import IrisTest
 
@@ -476,7 +475,6 @@ class Test_load_parquet(unittest.TestCase):
         self.df = self.df.sort_values(by=["wmo_id"]).reset_index(drop=True)
         self.filepath = os.path.join(self.directory, "temp.parquet")
 
-
     def test_basic(self):
         """Test loading a parquet file."""
         self.df.to_parquet(self.filepath)
@@ -486,7 +484,7 @@ class Test_load_parquet(unittest.TestCase):
     def test_filter(self):
         """Test loading a parquet file with a filter."""
         self.df.to_parquet(self.filepath, partition_cols="wmo_id")
-        filters = [("wmo_id",  "==", "03002")]
+        filters = [("wmo_id", "==", "03002")]
         expected_df = self.df.loc[self.df["wmo_id"] == self.wmo_ids[0]]
         result = load_parquet(self.filepath, filters=filters)
         result["wmo_id"] = result["wmo_id"].astype(object)
@@ -495,7 +493,7 @@ class Test_load_parquet(unittest.TestCase):
     def test_empty_filter(self):
         """Test loading a parquet file with a filter where only an empty
         dataframe is loaded."""
-        filters = [("wmo_id",  "==", "03005")]
+        filters = [("wmo_id", "==", "03005")]
         msg = "does not contain the requested contents"
         with self.assertRaisesRegexp(IOError, msg):
             load_parquet(self.filepath, filters)

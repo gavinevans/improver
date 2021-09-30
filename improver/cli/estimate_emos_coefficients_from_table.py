@@ -137,9 +137,12 @@ def process(
     forecast_table = load_parquet(forecast, filters=[("diag", "==", diagnostic)])
     truth_table = load_parquet(truth, filters=[("diagnostic", "==", diagnostic)])
 
-    forecast, truth = forecast_and_truth_tables_to_cubes(forecast_table, truth_table, cycletime, forecast_period, training_length)
+    forecast, truth = forecast_and_truth_tables_to_cubes(
+        forecast_table, truth_table, cycletime, forecast_period, training_length
+    )
 
     import pdb
+
     pdb.set_trace()
 
     plugin = EstimateCoefficientsForEnsembleCalibration(

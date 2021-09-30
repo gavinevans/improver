@@ -32,25 +32,26 @@
 
 from collections import OrderedDict
 from datetime import timedelta
-
-from pandas.core.indexes.base import Index
-from pandas.core.indexes.datetimes import DatetimeIndex
-from improver.utilities.temporal import cycletime_to_datetime
 from typing import List, Optional, Tuple
 
 import iris
 import numpy as np
 import pandas as pd
-from pandas.core.frame import DataFrame
 from iris.cube import Cube, CubeList
+from pandas.core.frame import DataFrame
+from pandas.core.indexes.base import Index
+from pandas.core.indexes.datetimes import DatetimeIndex
 
-from improver.ensemble_copula_coupling.ensemble_copula_coupling import RebadgePercentilesAsRealizations
+from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
+    RebadgePercentilesAsRealizations,
+)
+from improver.metadata.constants.time_types import TIME_COORDS
 from improver.metadata.probabilistic import (
     get_diagnostic_cube_name_from_probability_name,
 )
-from improver.metadata.constants.time_types import TIME_COORDS
 from improver.spotdata.build_spotdata_cube import build_spotdata_cube
 from improver.utilities.cube_manipulation import MergeCubes
+from improver.utilities.temporal import cycletime_to_datetime
 
 
 def split_forecasts_and_truth(
@@ -130,7 +131,9 @@ def split_forecasts_and_truth(
     return forecast, truth, land_sea_mask
 
 
-def _date_range_for_calibration(cycletime: str, forecast_period: int, training_length: int) -> DatetimeIndex:
+def _date_range_for_calibration(
+    cycletime: str, forecast_period: int, training_length: int
+) -> DatetimeIndex:
     """Compute the date range required for extracting the required training
     dataset.
 
@@ -143,14 +146,18 @@ def _date_range_for_calibration(cycletime: str, forecast_period: int, training_l
         Datetimes ending one day prior to the computed validity time. The number
         of datetimes is equal to the training length.
     """
-    validity_time = cycletime_to_datetime(cycletime) + timedelta(hours=int(forecast_period))
+    validity_time = cycletime_to_datetime(cycletime) + timedelta(
+        hours=int(forecast_period)
+    )
 
     return pd.date_range(
-        end=validity_time-timedelta(days=1), periods=int(training_length), freq="D")
+        end=validity_time - timedelta(days=1), periods=int(training_length), freq="D"
+    )
 
 
-def forecast_table_to_cube(table: DataFrame, date_range: DatetimeIndex,
-                           forecast_period: int) -> Cube:
+def forecast_table_to_cube(
+    table: DataFrame, date_range: DatetimeIndex, forecast_period: int
+) -> Cube:
     """Convert a forecast table into an iris Cube. The percentiles within the
     forecast table are rebadged as realizations.
 
@@ -170,8 +177,10 @@ def forecast_table_to_cube(table: DataFrame, date_range: DatetimeIndex,
 
     cubelist = CubeList()
     for adate in date_range:
-        time_table = table.loc[(table["time"] == adate) &
-                               (table["forecast_period"] == timedelta(hours=int(forecast_period)))]
+        time_table = table.loc[
+            (table["time"] == adate)
+            & (table["forecast_period"] == timedelta(hours=int(forecast_period)))
+        ]
 
         if time_table.empty:
             continue
@@ -180,19 +189,23 @@ def forecast_table_to_cube(table: DataFrame, date_range: DatetimeIndex,
         time_coord = iris.coords.DimCoord(
             np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
             "time",
-            #bounds=table["time_bounds"],
+            # bounds=table["time_bounds"],
             units=TIME_COORDS["time"].units,
         )
         fp_coord = iris.coords.AuxCoord(
-            np.timedelta64(time_table["forecast_period"].unique()[0], "s").astype(np.int32),
+            np.timedelta64(time_table["forecast_period"].unique()[0], "s").astype(
+                np.int32
+            ),
             "forecast_period",
-            #bounds=table["forecast_period_bounds"],
+            # bounds=table["forecast_period_bounds"],
             units=TIME_COORDS["forecast_period"].units,
         )
         frt_coord = iris.coords.AuxCoord(
-            np.datetime64(time_table["forecast_reference_time"].unique()[0], "s").astype(np.int64),
+            np.datetime64(
+                time_table["forecast_reference_time"].unique()[0], "s"
+            ).astype(np.int64),
             "forecast_reference_time",
-            #bounds=table["forecast_reference_time_bounds"],
+            # bounds=table["forecast_reference_time_bounds"],
             units=TIME_COORDS["forecast_reference_time"].units,
         )
         for percentile in table["percentile"].unique():
@@ -212,14 +225,15 @@ def forecast_table_to_cube(table: DataFrame, date_range: DatetimeIndex,
                 perc_table["longitude"].astype(np.float32),  # longitude
                 [w.zfill(5) for w in perc_table["wmo_id"].values],
                 scalar_coords=[time_coord, frt_coord, fp_coord, perc_coord],
-
             )
             cubelist.append(cube)
 
     if not cubelist:
-        msg = (f"No entries matching these dates {date_range} and "
-               f"this forecast period {forecast_period} are "
-               "available within the dataframe provided.")
+        msg = (
+            f"No entries matching these dates {date_range} and "
+            f"this forecast period {forecast_period} are "
+            "available within the dataframe provided."
+        )
         raise ValueError(msg)
     forecast_cube = cubelist.merge_cube()
 
@@ -253,14 +267,16 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
         time_table = time_table.set_index("wmo_id").reindex(new_index)
         # Fill the alt/lat/lon with the mode.
         for col in ["altitude", "latitude", "longitude"]:
-            time_table[col] = table.groupby(by="wmo_id", sort=False)[col].agg(pd.Series.mode)
+            time_table[col] = table.groupby(by="wmo_id", sort=False)[col].agg(
+                pd.Series.mode
+            )
         time_table = time_table.reset_index()
 
         # Filter WMO IDs as only want IDs in truth table.
         time_coord = iris.coords.DimCoord(
             np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
             "time",
-            #bounds=table["time_bounds"],
+            # bounds=table["time_bounds"],
             units=TIME_COORDS["time"].units,
         )
 
@@ -279,8 +295,10 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
         cubelist.append(forecast_cube)
 
     if not cubelist:
-        msg = (f"No entries matching these dates {date_range} "
-               "are available within the dataframe provided.")
+        msg = (
+            f"No entries matching these dates {date_range} "
+            "are available within the dataframe provided."
+        )
         raise ValueError(msg)
     return cubelist.merge_cube()
 
@@ -314,8 +332,12 @@ def _filter_forecasts_and_truths(forecast: Cube, truth: Cube) -> Tuple[Cube, Cub
 
 
 def forecast_and_truth_tables_to_cubes(
-        forecast: DataFrame, truth: DataFrame, cycletime: str,
-        forecast_period: int, training_length: int) -> Tuple[Cube, Cube]:
+    forecast: DataFrame,
+    truth: DataFrame,
+    cycletime: str,
+    forecast_period: int,
+    training_length: int,
+) -> Tuple[Cube, Cube]:
     """Convert a truth table into an iris Cube.
 
     Args:
@@ -334,7 +356,8 @@ def forecast_and_truth_tables_to_cubes(
         Forecasts and truths for the training period in Cube format.
     """
     date_range = _date_range_for_calibration(
-        cycletime, forecast_period, training_length)
+        cycletime, forecast_period, training_length
+    )
     forecast = forecast_table_to_cube(forecast, date_range, forecast_period)
     truth = truth_table_to_cube(truth, date_range)
     forecast, truth = _filter_forecasts_and_truths(forecast, truth)
