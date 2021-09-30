@@ -43,6 +43,9 @@ def process(
     truth: cli.inputpath,
     *,
     diagnostic,
+    cycletime,
+    forecast_period,
+    training_length,
     distribution,
     point_by_point=False,
     use_default_initial_guess=False,
@@ -67,6 +70,15 @@ def process(
             Optionally this may also contain a single land-sea mask cube on the
             same domain as the historic forecasts and truth (where land points
             are set to one and sea points are set to zero).
+        diagnostic (str):
+            The name of the diagnostic to be calibrated within the forecast
+            and truth tables.
+        cycletime (str):
+            Cycletime of a format similar to 20170109T0000Z.
+        forecast_period (int):
+            Forecast period to be calibrated in hours.
+        training_length (int):
+            Number of days within the training period.
         distribution (str):
             The distribution that will be used for minimising the
             Continuous Ranked Probability Score when estimating the EMOS
@@ -116,14 +128,19 @@ def process(
             coefficient is stored in a separate cube.
     """
 
-    from improver.calibration import forecast_table_to_cube, truth_table_to_cube
+    from improver.calibration import forecast_and_truth_tables_to_cubes
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
+    from improver.utilities.load import load_parquet
 
-    import pandas as pd
-    forecast = forecast_table_to_cube(forecast)
-    truth = truth_table_to_cube(truth)
+    forecast_table = load_parquet(forecast, filters=[("diag", "==", diagnostic)])
+    truth_table = load_parquet(truth, filters=[("diagnostic", "==", diagnostic)])
+
+    forecast, truth = forecast_and_truth_tables_to_cubes(forecast_table, truth_table, cycletime, forecast_period, training_length)
+
+    import pdb
+    pdb.set_trace()
 
     plugin = EstimateCoefficientsForEnsembleCalibration(
         distribution,
@@ -134,4 +151,4 @@ def process(
         tolerance=tolerance,
         max_iterations=max_iterations,
     )
-    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+    return plugin(forecast, truth)

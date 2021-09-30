@@ -32,18 +32,24 @@
 
 from collections import OrderedDict
 from datetime import timedelta
+
+from pandas.core.indexes.base import Index
+from pandas.core.indexes.datetimes import DatetimeIndex
 from improver.utilities.temporal import cycletime_to_datetime
 from typing import List, Optional, Tuple
 
 import iris
 import numpy as np
 import pandas as pd
-from iris.cube import Cube
+from pandas.core.frame import DataFrame
+from iris.cube import Cube, CubeList
 
+from improver.ensemble_copula_coupling.ensemble_copula_coupling import RebadgePercentilesAsRealizations
 from improver.metadata.probabilistic import (
     get_diagnostic_cube_name_from_probability_name,
 )
 from improver.metadata.constants.time_types import TIME_COORDS
+from improver.spotdata.build_spotdata_cube import build_spotdata_cube
 from improver.utilities.cube_manipulation import MergeCubes
 
 
@@ -124,95 +130,212 @@ def split_forecasts_and_truth(
     return forecast, truth, land_sea_mask
 
 
-def load_parquet(filepath, filters=None) -> pd.DataFrame:
-    df = pd.read_parquet(filepath, filters=filters)
-    if df.empty:
-        msg = (f"The requested filepath {filepath} does not contain the "
-               f"requested contents: {filters}")
-        raise IOError(msg)
-    return df
-
-
-def forecast_table_to_cube(filepath, diagnostic, cycletime: str,
-        forecast_period: int, training_length: int) -> Cube:
-    """Convert a forecast table into an iris Cube.
+def _date_range_for_calibration(cycletime: str, forecast_period: int, training_length: int) -> DatetimeIndex:
+    """Compute the date range required for extracting the required training
+    dataset.
 
     Args:
-        filepath:
-            Path to a parquet file containing forecasts.
-        diagnostic:
-            The name of the diagnostic. This diagnostic must be available
-            within the diag column within the forecast table.
+        cycletime ([type]): [description]
+        forecast_period ([type]): [description]
+        training_length ([type]): [description]
 
     Returns:
-
+        Datetimes ending one day prior to the computed validity time. The number
+        of datetimes is equal to the training length.
     """
-    table = load_parquet(filepath, filters=[("diag", "==", diagnostic)])
-    forecast_period_td = timedelta(forecast_period)
-    validity_time = cycletime_to_datetime(cycletime) + forecast_period_td
+    validity_time = cycletime_to_datetime(cycletime) + timedelta(hours=int(forecast_period))
 
-    date_range = pd.date_range(end=validity_time-timedelta(day=1), periods=training_length, freq="D")
+    return pd.date_range(
+        end=validity_time-timedelta(days=1), periods=int(training_length), freq="D")
 
-    #cube = pd.to_xarray(table).to_iris()
 
+def forecast_table_to_cube(table: DataFrame, date_range: DatetimeIndex,
+                           forecast_period: int) -> Cube:
+    """Convert a forecast table into an iris Cube. The percentiles within the
+    forecast table are rebadged as realizations.
+
+    Args:
+        table:
+            DataFrame expected to contain the following columns: .
+        date_range:
+            Datetimes spanning the training period.
+        forecast_period:
+            Forecast period in hours as an integer.
+
+    Returns:
+        Cube containing the forecasts from the training period.
+    """
+    for coord in ["time", "forecast_reference_time"]:
+        table[coord] = table[coord].dt.tz_localize(None)
+
+    cubelist = CubeList()
     for adate in date_range:
-        table = table.loc[(table["time"] == adate) &
-                          (table["forecast_period"] == forecast_period_td)]
+        time_table = table.loc[(table["time"] == adate) &
+                               (table["forecast_period"] == timedelta(hours=int(forecast_period)))]
 
+        if time_table.empty:
+            continue
 
         # Filter WMO IDs as only want IDs in truth table.
         time_coord = iris.coords.DimCoord(
-            table["time"].unique(),
+            np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
             "time",
-            bounds=table["time_bounds"],
+            #bounds=table["time_bounds"],
             units=TIME_COORDS["time"].units,
         )
         fp_coord = iris.coords.AuxCoord(
-            table["forecast_period"].unique(),
+            np.timedelta64(time_table["forecast_period"].unique()[0], "s").astype(np.int32),
             "forecast_period",
-            bounds=table["forecast_period_bounds"],
-            units=TIME_COORDS["time"].units,
+            #bounds=table["forecast_period_bounds"],
+            units=TIME_COORDS["forecast_period"].units,
         )
         frt_coord = iris.coords.AuxCoord(
-            table["forecast_reference_time"],
+            np.datetime64(time_table["forecast_reference_time"].unique()[0], "s").astype(np.int64),
             "forecast_reference_time",
-            bounds=table["forecast_reference_time_bounds"],
-            units=TIME_COORDS["time"].units,
+            #bounds=table["forecast_reference_time_bounds"],
+            units=TIME_COORDS["forecast_reference_time"].units,
         )
         for percentile in table["percentile"].unique():
             perc_coord = iris.coords.DimCoord(
-                percentile, "percentile", units=1
+                np.int32(percentile), long_name="percentile", units=1
             )
+            perc_table = time_table.loc[table["percentile"] == percentile]
+
+            cube = build_spotdata_cube(
+                perc_table["fc"].astype(np.float32),  # data
+                "air_temperature",
+                "Celsius",
+                # perc_table["cf_name"].unique(),
+                # perc_table["units"].unique(),
+                perc_table["altitude"].astype(np.float32),  # altitude
+                perc_table["latitude"].astype(np.float32),  # latitude
+                perc_table["longitude"].astype(np.float32),  # longitude
+                [w.zfill(5) for w in perc_table["wmo_id"].values],
+                scalar_coords=[time_coord, frt_coord, fp_coord, perc_coord],
+
+            )
+            cubelist.append(cube)
+
+    if not cubelist:
+        msg = (f"No entries matching these dates {date_range} and "
+               f"this forecast period {forecast_period} are "
+               "available within the dataframe provided.")
+        raise ValueError(msg)
+    forecast_cube = cubelist.merge_cube()
+
+    return RebadgePercentilesAsRealizations()(forecast_cube)
+
+
+def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
+    """Convert a truth table into an iris Cube.
+
+    Args:
+        table:
+            DataFrame expected to contain the following columns: .
+        date_range:
+            Datetimes spanning the training period.
+
+    Returns:
+        Cube containing the truths from the training period.
+    """
+    table["time"] = table["time"].dt.tz_localize(None)
+
+    cubelist = CubeList()
+    for adate in date_range:
+
+        time_table = table.loc[table["time"] == adate]
+
+        if time_table.empty:
+            continue
+
+        # Ensure that every WMO ID has an entry for a particular time.
+        new_index = Index(table["wmo_id"].unique(), name="wmo_id")
+        time_table = time_table.set_index("wmo_id").reindex(new_index)
+        # Fill the alt/lat/lon with the mode.
+        for col in ["altitude", "latitude", "longitude"]:
+            time_table[col] = table.groupby(by="wmo_id", sort=False)[col].agg(pd.Series.mode)
+        time_table = time_table.reset_index()
+
+        # Filter WMO IDs as only want IDs in truth table.
+        time_coord = iris.coords.DimCoord(
+            np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
+            "time",
+            #bounds=table["time_bounds"],
+            units=TIME_COORDS["time"].units,
+        )
 
         forecast_cube = build_spotdata_cube(
-            table["fc"].astype(np.float32),  # data
-            table["cf_name"].unique(),
-            table["units"].unique(),
-            table["altitude"].astype(np.float32),  # altitude
-            table["latitude"].astype(np.float32),  # latitude
-            table["longitude"].astype(np.float32),  # longitude
-            table["wmo_id"].unique(),
-            additional_dims=time_coord + perc_coord,
+            time_table["ob_value"].astype(np.float32),  # data
+            "air_temperature",
+            "Celsius",
+            # time_table["cf_name"].unique(),
+            # time_table["units"].unique(),
+            time_table["altitude"],
+            time_table["latitude"],
+            time_table["longitude"],
+            [w.zfill(5) for w in time_table["wmo_id"].values],
+            scalar_coords=[time_coord],
         )
-        forecast_cube.add_aux_coord(
-            (frt_coord, forecast_cube.coord("time").ndim),
-            (fp_coord, forecast_cube.coord("time").ndim),
-        )
+        cubelist.append(forecast_cube)
 
-    forecast_cube = RebadgePercentilesAsRealizations()(forecast_cube)
-
-    plugin = EstimateCoefficientsForEnsembleCalibration(
-        distribution,
-        point_by_point=point_by_point,
-        use_default_initial_guess=use_default_initial_guess,
-        desired_units=units,
-        predictor=predictor,
-        tolerance=tolerance,
-        max_iterations=max_iterations,
-    )
-    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+    if not cubelist:
+        msg = (f"No entries matching these dates {date_range} "
+               "are available within the dataframe provided.")
+        raise ValueError(msg)
+    return cubelist.merge_cube()
 
 
-def truth_table_to_cube(filepath, diagnostic):
+def _filter_forecasts_and_truths(forecast: Cube, truth: Cube) -> Tuple[Cube, Cube]:
+    """Filter forecasts and truths to ensure consistent WMO IDs.
 
-    truth_table = pd.read_parquet(truth, filters=[("diag", "==", {diagnostic})])
+    Args:
+        forecast:
+            The training period forecasts.
+        truth:
+            The training period truths.
+
+    Returns:
+        Forecasts and truths for the training period that have been filtered
+        only include sites that are present in both the forecasts and truths
+        based on the WMO ID.
+
+    """
+    forecast_constr = iris.Constraint(wmo_id=forecast.coord("wmo_id").points)
+    truth_constr = iris.Constraint(wmo_id=truth.coord("wmo_id").points)
+    forecast = forecast.extract(truth_constr)
+    truth = truth.extract(forecast_constr)
+
+    # As the lat/lon/alt of the observation can change, ensure that the
+    # lat/lon/alt are consistent over the training period.
+    for coord in ["altitude", "latitude", "longitude"]:
+        truth.coord(coord).points = forecast.coord(coord).points
+
+    return forecast, truth
+
+
+def forecast_and_truth_tables_to_cubes(
+        forecast: DataFrame, truth: DataFrame, cycletime: str,
+        forecast_period: int, training_length: int) -> Tuple[Cube, Cube]:
+    """Convert a truth table into an iris Cube.
+
+    Args:
+        forecast:
+            DataFrame expected to contain the following columns: .
+        truth:
+            DataFrame expected to contain the following columns: .
+        cycletime:
+            Cycletime of a format similar to 20170109T0000Z.
+        forecast_period:
+            Forecast period in hours as an integer.
+        training_length:
+            Training length in days as an integer.
+
+    Returns:
+        Forecasts and truths for the training period in Cube format.
+    """
+    date_range = _date_range_for_calibration(
+        cycletime, forecast_period, training_length)
+    forecast = forecast_table_to_cube(forecast, date_range, forecast_period)
+    truth = truth_table_to_cube(truth, date_range)
+    forecast, truth = _filter_forecasts_and_truths(forecast, truth)
+    return forecast, truth
