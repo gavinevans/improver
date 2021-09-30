@@ -38,6 +38,7 @@ from tempfile import mkdtemp
 import iris
 import numpy as np
 import pandas as pd
+import pytest
 from iris.tests import IrisTest
 
 from improver.metadata.probabilistic import find_threshold_coordinate
@@ -446,6 +447,7 @@ class Test_load_parquet(unittest.TestCase):
 
     def setUp(self):
         """Set-up tests."""
+        pytest.importorskip("fastparquet")
         self.directory = mkdtemp()
 
         data = np.array([6.8, 2.7, 21.2], dtype=np.float32)
@@ -474,19 +476,20 @@ class Test_load_parquet(unittest.TestCase):
         self.df = pd.DataFrame(df_dict)
         self.df = self.df.sort_values(by=["wmo_id"]).reset_index(drop=True)
         self.filepath = os.path.join(self.directory, "temp.parquet")
+        self.partitioned_filepath = os.path.join(self.directory, "partition.parquet")
+        self.df.to_parquet(self.filepath)
+        self.df.to_parquet(self.partitioned_filepath, partition_cols="wmo_id")
 
     def test_basic(self):
         """Test loading a parquet file."""
-        self.df.to_parquet(self.filepath)
         result = load_parquet(self.filepath)
         pd.testing.assert_frame_equal(result, self.df)
 
     def test_filter(self):
         """Test loading a parquet file with a filter."""
-        self.df.to_parquet(self.filepath, partition_cols="wmo_id")
         filters = [("wmo_id", "==", "03002")]
         expected_df = self.df.loc[self.df["wmo_id"] == self.wmo_ids[0]]
-        result = load_parquet(self.filepath, filters=filters)
+        result = load_parquet(self.partitioned_filepath, filters=filters)
         result["wmo_id"] = result["wmo_id"].astype(object)
         pd.testing.assert_frame_equal(result, expected_df)
 
@@ -496,7 +499,7 @@ class Test_load_parquet(unittest.TestCase):
         filters = [("wmo_id", "==", "03005")]
         msg = "does not contain the requested contents"
         with self.assertRaisesRegexp(IOError, msg):
-            load_parquet(self.filepath, filters)
+            load_parquet(self.partitioned_filepath, filters)
 
 
 if __name__ == "__main__":

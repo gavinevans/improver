@@ -138,9 +138,12 @@ def _date_range_for_calibration(
     dataset.
 
     Args:
-        cycletime ([type]): [description]
-        forecast_period ([type]): [description]
-        training_length ([type]): [description]
+        cycletime:
+            Cycletime of a format similar to 20170109T0000Z.
+        forecast_period:
+            Forecast period in hours as an integer.
+        training_length:
+            Training length in days as an integer.
 
     Returns:
         Datetimes ending one day prior to the computed validity time. The number
@@ -185,7 +188,6 @@ def forecast_table_to_cube(
         if time_table.empty:
             continue
 
-        # Filter WMO IDs as only want IDs in truth table.
         time_coord = iris.coords.DimCoord(
             np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
             "time",
@@ -265,14 +267,14 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
         # Ensure that every WMO ID has an entry for a particular time.
         new_index = Index(table["wmo_id"].unique(), name="wmo_id")
         time_table = time_table.set_index("wmo_id").reindex(new_index)
-        # Fill the alt/lat/lon with the mode.
+        # Fill the alt/lat/lon with the mode to ensure consistent coordinates
+        # to support merging.
         for col in ["altitude", "latitude", "longitude"]:
             time_table[col] = table.groupby(by="wmo_id", sort=False)[col].agg(
                 pd.Series.mode
             )
         time_table = time_table.reset_index()
 
-        # Filter WMO IDs as only want IDs in truth table.
         time_coord = iris.coords.DimCoord(
             np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
             "time",
