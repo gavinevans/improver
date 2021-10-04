@@ -188,26 +188,31 @@ def forecast_table_to_cube(
         if time_table.empty:
             continue
 
+        time_point = np.datetime64(adate, "s").astype(np.int64)
         time_coord = iris.coords.DimCoord(
-            np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
+            time_point,
             "time",
-            # bounds=table["time_bounds"],
+            bounds=[time_point - np.timedelta64(time_table["period"], "s"), time_point],
             units=TIME_COORDS["time"].units,
         )
+        fp_point = (
+            np.timedelta64(int(forecast_period), "h")
+            .astype("timedelta64[s]")
+            .astype(np.int32)
+        )
         fp_coord = iris.coords.AuxCoord(
-            np.timedelta64(time_table["forecast_period"].unique()[0], "s").astype(
-                np.int32
-            ),
+            fp_point,
             "forecast_period",
-            # bounds=table["forecast_period_bounds"],
+            bounds=[fp_point - np.timedelta64(time_table["period"], "s"), fp_point],
             units=TIME_COORDS["forecast_period"].units,
         )
+        frt_point = np.datetime64(
+            time_table["forecast_reference_time"].unique()[0], "s"
+        ).astype(np.int64)
         frt_coord = iris.coords.AuxCoord(
-            np.datetime64(
-                time_table["forecast_reference_time"].unique()[0], "s"
-            ).astype(np.int64),
+            frt_point,
             "forecast_reference_time",
-            # bounds=table["forecast_reference_time_bounds"],
+            bounds=[frt_point - np.timedelta64(time_table["period"], "s"), frt_point],
             units=TIME_COORDS["forecast_reference_time"].units,
         )
         for percentile in table["percentile"].unique():
@@ -275,10 +280,11 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
             )
         time_table = time_table.reset_index()
 
+        time_point = np.datetime64(adate, "s").astype(np.int64)
         time_coord = iris.coords.DimCoord(
-            np.datetime64(time_table["time"].unique()[0], "s").astype(np.int64),
+            time_point,
             "time",
-            # bounds=table["time_bounds"],
+            bounds=[time_point - np.timedelta64(time_table["period"], "s"), time_point],
             units=TIME_COORDS["time"].units,
         )
 
