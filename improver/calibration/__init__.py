@@ -32,7 +32,7 @@
 
 from collections import OrderedDict
 from datetime import timedelta
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import iris
 import numpy as np
@@ -131,6 +131,26 @@ def split_forecasts_and_truth(
     return forecast, truth, land_sea_mask
 
 
+def _unique_check(table: DataFrame, column: str) -> Any:
+    """Check whether the value in the column is unique.
+
+    Args:
+        table:
+            The DataFrame to be checked.
+        column:
+            Name of a column in the table.
+
+    Raises:
+        ValueError: Only one unique value within the specifed column
+            is expected.
+    """
+    if len(table[column].unique()) > 1:
+        msg = (f"Multiple values provided for the {column}: "
+               f"{table[column].unique()}. "
+               f"Only one value for the {column} is expected.")
+        raise ValueError(msg)
+
+
 def _date_range_for_calibration(
     cycletime: str, forecast_period: int, training_length: int
 ) -> DatetimeIndex:
@@ -188,33 +208,52 @@ def forecast_table_to_cube(
         if time_table.empty:
             continue
 
-        time_point = np.datetime64(adate, "s").astype(np.int64)
-        time_coord = iris.coords.DimCoord(
-            time_point,
-            "time",
-            bounds=[time_point - np.timedelta64(time_table["period"], "s"), time_point],
-            units=TIME_COORDS["time"].units,
-        )
+        # The following columns are expected to contain one unique value
+        # per column.
+        for col in ["period", "height", "cf_name", "units", "diag"]:
+            _unique_check(time_table, col)
+
+        time_point = np.datetime64(adate, "s")
         fp_point = (
             np.timedelta64(int(forecast_period), "h")
             .astype("timedelta64[s]")
-            .astype(np.int32)
-        )
-        fp_coord = iris.coords.AuxCoord(
-            fp_point,
-            "forecast_period",
-            bounds=[fp_point - np.timedelta64(time_table["period"], "s"), fp_point],
-            units=TIME_COORDS["forecast_period"].units,
         )
         frt_point = np.datetime64(
-            time_table["forecast_reference_time"].unique()[0], "s"
+            time_table["forecast_reference_time"].values[0], "s"
         ).astype(np.int64)
+
+        if time_table["period"].isna().all():
+            time_bounds = None
+            fp_bounds = None
+        else:
+            period = np.timedelta64(time_table["period"].values[0], "s")
+            time_bounds = [time_point - period, time_point]
+            fp_bounds = [fp_point - period, fp_point]
+
+        time_coord = iris.coords.DimCoord(
+            time_point.astype(TIME_COORDS["time"].dtype),
+            "time",
+            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds] if time_bounds else time_bounds,
+            units=TIME_COORDS["time"].units,
+        )
+        fp_coord = iris.coords.AuxCoord(
+            fp_point.astype(TIME_COORDS["forecast_period"].dtype),
+            "forecast_period",
+            bounds=[f.astype(TIME_COORDS["forecast_period"].dtype) for f in fp_bounds] if fp_bounds else fp_bounds,
+            units=TIME_COORDS["forecast_period"].units,
+        )
         frt_coord = iris.coords.AuxCoord(
             frt_point,
             "forecast_reference_time",
-            bounds=[frt_point - np.timedelta64(time_table["period"], "s"), frt_point],
             units=TIME_COORDS["forecast_reference_time"].units,
         )
+
+        height_coord = iris.coords.AuxCoord(
+            time_table["height"].values[0],
+            "height",
+            units="m",
+        )
+
         for percentile in table["percentile"].unique():
             perc_coord = iris.coords.DimCoord(
                 np.int32(percentile), long_name="percentile", units=1
@@ -222,16 +261,14 @@ def forecast_table_to_cube(
             perc_table = time_table.loc[table["percentile"] == percentile]
 
             cube = build_spotdata_cube(
-                perc_table["fc"].astype(np.float32),  # data
-                "air_temperature",
-                "Celsius",
-                # perc_table["cf_name"].unique(),
-                # perc_table["units"].unique(),
+                perc_table["forecast"].astype(np.float32),  # data
+                perc_table["cf_name"].values[0],
+                perc_table["units"].values[0],
                 perc_table["altitude"].astype(np.float32),  # altitude
                 perc_table["latitude"].astype(np.float32),  # latitude
                 perc_table["longitude"].astype(np.float32),  # longitude
-                [w.zfill(5) for w in perc_table["wmo_id"].values],
-                scalar_coords=[time_coord, frt_coord, fp_coord, perc_coord],
+                perc_table["wmo_id"].values,
+                scalar_coords=[time_coord, frt_coord, fp_coord, perc_coord, height_coord],
             )
             cubelist.append(cube)
 
@@ -269,36 +306,53 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
         if time_table.empty:
             continue
 
+        # The following columns are expected to contain one unique value
+        # per column.
+        expected_unique_cols = ["period", "height", "cf_name", "units", "diag"]
+        for col in expected_unique_cols:
+            _unique_check(time_table, col)
+
         # Ensure that every WMO ID has an entry for a particular time.
         new_index = Index(table["wmo_id"].unique(), name="wmo_id")
         time_table = time_table.set_index("wmo_id").reindex(new_index)
         # Fill the alt/lat/lon with the mode to ensure consistent coordinates
-        # to support merging.
-        for col in ["altitude", "latitude", "longitude"]:
+        # to support merging. Also fill other columns known to contain one
+        # unique value. Columns containing entirely NaNs will return NaNs.
+        for col in ["altitude", "latitude", "longitude"] + expected_unique_cols:
+            dropna = False if table[col].isna().all() else True
             time_table[col] = table.groupby(by="wmo_id", sort=False)[col].agg(
-                pd.Series.mode
+                lambda x: pd.Series.mode(x, dropna=dropna)
             )
         time_table = time_table.reset_index()
 
-        time_point = np.datetime64(adate, "s").astype(np.int64)
+        time_point = np.datetime64(adate, "s")
+        if time_table["period"].isna().all():
+            time_bounds = None
+        else:
+            time_bounds = [time_point - np.timedelta64(time_table["period"].values[0], "s"), time_point]
+
         time_coord = iris.coords.DimCoord(
-            time_point,
+            time_point.astype(TIME_COORDS["time"].dtype),
             "time",
-            bounds=[time_point - np.timedelta64(time_table["period"], "s"), time_point],
+            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds] if time_bounds else time_bounds,
             units=TIME_COORDS["time"].units,
+        )
+
+        height_coord = iris.coords.AuxCoord(
+            time_table["height"].values[0],
+            "height",
+            units="m",
         )
 
         forecast_cube = build_spotdata_cube(
             time_table["ob_value"].astype(np.float32),  # data
-            "air_temperature",
-            "Celsius",
-            # time_table["cf_name"].unique(),
-            # time_table["units"].unique(),
+            time_table["cf_name"].values[0],
+            time_table["units"].values[0],
             time_table["altitude"],
             time_table["latitude"],
             time_table["longitude"],
-            [w.zfill(5) for w in time_table["wmo_id"].values],
-            scalar_coords=[time_coord],
+            time_table["wmo_id"].values,
+            scalar_coords=[time_coord, height_coord],
         )
         cubelist.append(forecast_cube)
 
