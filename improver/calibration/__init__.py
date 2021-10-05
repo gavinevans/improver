@@ -145,9 +145,11 @@ def _unique_check(table: DataFrame, column: str) -> Any:
             is expected.
     """
     if len(table[column].unique()) > 1:
-        msg = (f"Multiple values provided for the {column}: "
-               f"{table[column].unique()}. "
-               f"Only one value for the {column} is expected.")
+        msg = (
+            f"Multiple values provided for the {column}: "
+            f"{table[column].unique()}. "
+            f"Only one value for the {column} is expected."
+        )
         raise ValueError(msg)
 
 
@@ -214,10 +216,7 @@ def forecast_table_to_cube(
             _unique_check(time_table, col)
 
         time_point = np.datetime64(adate, "s")
-        fp_point = (
-            np.timedelta64(int(forecast_period), "h")
-            .astype("timedelta64[s]")
-        )
+        fp_point = np.timedelta64(int(forecast_period), "h").astype("timedelta64[s]")
         frt_point = np.datetime64(
             time_table["forecast_reference_time"].values[0], "s"
         ).astype(np.int64)
@@ -233,13 +232,17 @@ def forecast_table_to_cube(
         time_coord = iris.coords.DimCoord(
             time_point.astype(TIME_COORDS["time"].dtype),
             "time",
-            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds] if time_bounds else time_bounds,
+            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds]
+            if time_bounds
+            else time_bounds,
             units=TIME_COORDS["time"].units,
         )
         fp_coord = iris.coords.AuxCoord(
             fp_point.astype(TIME_COORDS["forecast_period"].dtype),
             "forecast_period",
-            bounds=[f.astype(TIME_COORDS["forecast_period"].dtype) for f in fp_bounds] if fp_bounds else fp_bounds,
+            bounds=[f.astype(TIME_COORDS["forecast_period"].dtype) for f in fp_bounds]
+            if fp_bounds
+            else fp_bounds,
             units=TIME_COORDS["forecast_period"].units,
         )
         frt_coord = iris.coords.AuxCoord(
@@ -249,9 +252,7 @@ def forecast_table_to_cube(
         )
 
         height_coord = iris.coords.AuxCoord(
-            time_table["height"].values[0],
-            "height",
-            units="m",
+            time_table["height"].values[0], "height", units="m",
         )
 
         for percentile in table["percentile"].unique():
@@ -268,7 +269,13 @@ def forecast_table_to_cube(
                 perc_table["latitude"].astype(np.float32),  # latitude
                 perc_table["longitude"].astype(np.float32),  # longitude
                 perc_table["wmo_id"].values,
-                scalar_coords=[time_coord, frt_coord, fp_coord, perc_coord, height_coord],
+                scalar_coords=[
+                    time_coord,
+                    frt_coord,
+                    fp_coord,
+                    perc_coord,
+                    height_coord,
+                ],
             )
             cubelist.append(cube)
 
@@ -329,19 +336,22 @@ def truth_table_to_cube(table: DataFrame, date_range: DatetimeIndex) -> Cube:
         if time_table["period"].isna().all():
             time_bounds = None
         else:
-            time_bounds = [time_point - np.timedelta64(time_table["period"].values[0], "s"), time_point]
+            time_bounds = [
+                time_point - np.timedelta64(time_table["period"].values[0], "s"),
+                time_point,
+            ]
 
         time_coord = iris.coords.DimCoord(
             time_point.astype(TIME_COORDS["time"].dtype),
             "time",
-            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds] if time_bounds else time_bounds,
+            bounds=[t.astype(TIME_COORDS["time"].dtype) for t in time_bounds]
+            if time_bounds
+            else time_bounds,
             units=TIME_COORDS["time"].units,
         )
 
         height_coord = iris.coords.AuxCoord(
-            time_table["height"].values[0],
-            "height",
-            units="m",
+            time_table["height"].values[0], "height", units="m",
         )
 
         forecast_cube = build_spotdata_cube(

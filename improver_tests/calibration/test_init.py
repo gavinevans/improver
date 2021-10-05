@@ -249,7 +249,7 @@ def _chunker(seq, size):
     Return:
         A sequence split into chunks.
     """
-    return (seq[pos: pos + size] for pos in range(0, len(seq), size))
+    return (seq[pos : pos + size] for pos in range(0, len(seq), size))
 
 
 class Test_shared_dataframes(unittest.TestCase):
@@ -301,7 +301,7 @@ class Test_shared_dataframes(unittest.TestCase):
             "period": [self.period] * 27,
             "height": [self.height] * 27,
             "cf_name": [self.cf_name] * 27,
-            "units": [self.units] * 27
+            "units": [self.units] * 27,
         }
 
         self.forecast_df = pd.DataFrame(df_dict)
@@ -320,7 +320,7 @@ class Test_shared_dataframes(unittest.TestCase):
             "period": [self.period] * 9,
             "height": [self.height] * 9,
             "cf_name": [self.cf_name] * 9,
-            "units": [self.units] * 9
+            "units": [self.units] * 9,
         }
 
         self.truth_df = pd.DataFrame(df_dict)
@@ -333,9 +333,7 @@ class Test_shared_dataframes(unittest.TestCase):
         )
 
         self.height_coord = iris.coords.AuxCoord(
-            np.array(self.height, dtype=np.float32),
-            "height",
-            units="m",
+            np.array(self.height, dtype=np.float32), "height", units="m",
         )
 
 
@@ -355,7 +353,10 @@ class Test_constructed_forecast_cubes(Test_shared_dataframes):
             time_coord = iris.coords.DimCoord(
                 time.astype(TIME_COORDS["time"].dtype),
                 "time",
-                bounds=[t.astype(TIME_COORDS["time"].dtype) for t in [time-self.period, time]],
+                bounds=[
+                    t.astype(TIME_COORDS["time"].dtype)
+                    for t in [time - self.period, time]
+                ],
                 units=TIME_COORDS["time"].units,
             )
 
@@ -363,7 +364,10 @@ class Test_constructed_forecast_cubes(Test_shared_dataframes):
             fp_coord = iris.coords.AuxCoord(
                 fp_point.astype(TIME_COORDS["forecast_period"].dtype),
                 "forecast_period",
-                bounds=[f.astype(TIME_COORDS["forecast_period"].dtype) for f in [fp_point-self.period, fp_point]],
+                bounds=[
+                    f.astype(TIME_COORDS["forecast_period"].dtype)
+                    for f in [fp_point - self.period, fp_point]
+                ],
                 units=TIME_COORDS["forecast_period"].units,
             )
 
@@ -388,7 +392,13 @@ class Test_constructed_forecast_cubes(Test_shared_dataframes):
                     self.latitudes,
                     self.longitudes,
                     wmo_id=self.wmo_ids,
-                    scalar_coords=[time_coord, frt_coord, fp_coord, realization_coord, self.height_coord],
+                    scalar_coords=[
+                        time_coord,
+                        frt_coord,
+                        fp_coord,
+                        realization_coord,
+                        self.height_coord,
+                    ],
                 )
                 cubes.append(cube)
 
@@ -414,7 +424,10 @@ class Test_constructed_truth_cubes(Test_shared_dataframes):
             time_coord = iris.coords.DimCoord(
                 time.astype(TIME_COORDS["time"].dtype),
                 "time",
-                bounds=[t.astype(TIME_COORDS["time"].dtype) for t in [time-self.period, time]],
+                bounds=[
+                    t.astype(TIME_COORDS["time"].dtype)
+                    for t in [time - self.period, time]
+                ],
                 units=TIME_COORDS["time"].units,
             )
             cubes.append(
@@ -526,7 +539,9 @@ class Test_truth_table_to_cube(Test_constructed_truth_cubes):
         result = truth_table_to_cube(df, self.date_range)
         np.testing.assert_array_equal(result.data, self.expected_period_truth.data)
         for coord in ["altitude", "latitude", "longitude"]:
-            self.assertEqual(result.coord(coord), self.expected_period_truth.coord(coord))
+            self.assertEqual(
+                result.coord(coord), self.expected_period_truth.coord(coord)
+            )
 
     def test_moving_sites(self):
         """Test an input DataFrame is converted correctly into an Iris Cube
@@ -579,7 +594,9 @@ class Test_forecast_and_truth_tables_to_cubes(
             self.training_length,
         )
         self.assertEqual(len(result), 2)
-        self.assertEqual(result, (self.expected_period_forecast, self.expected_period_truth))
+        self.assertEqual(
+            result, (self.expected_period_forecast, self.expected_period_truth)
+        )
 
     def test_site_mismatch(self):
         """Test for a mismatch in the sites available as truths and forecasts."""
@@ -613,7 +630,9 @@ class Test_forecast_and_truth_tables_to_cubes(
             self.training_length,
         )
         self.assertEqual(len(result), 2)
-        self.assertEqual(result, (self.expected_period_forecast, self.expected_period_truth))
+        self.assertEqual(
+            result, (self.expected_period_forecast, self.expected_period_truth)
+        )
 
 
 if __name__ == "__main__":
