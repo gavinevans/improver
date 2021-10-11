@@ -393,10 +393,6 @@ def _filter_forecasts_and_truths(forecast: Cube, truth: Cube) -> Tuple[Cube, Cub
         based on the WMO ID.
 
     """
-    # truth.coord("wmo_id").points = [x.zfill(5) for x in truth.coord("wmo_id").points]
-    # forecast.coord("wmo_id").points = [x.decode("utf-8").zfill(5) for x in forecast.coord("wmo_id").points]
-    # import pdb
-    # pdb.set_trace()
     forecast_constr = iris.Constraint(wmo_id=forecast.coord("wmo_id").points)
     truth_constr = iris.Constraint(wmo_id=truth.coord("wmo_id").points)
     forecast = forecast.extract(truth_constr)

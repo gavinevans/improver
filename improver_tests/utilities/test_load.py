@@ -466,7 +466,7 @@ class Test_load_parquet(unittest.TestCase):
         df_dict = {
             "ob_value": self.truth_data,
             "time": np.repeat([self.time1, self.time2, self.time3], 3),
-            "diag": diags * 9,
+            "diagnostic": diags * 9,
             "latitude": self.latitudes * 3,
             "longitude": self.longitudes * 3,
             "altitude": self.altitudes * 3,

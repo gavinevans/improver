@@ -30,7 +30,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Module for loading cubes."""
 
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import iris
 import pandas as pd
@@ -148,7 +148,9 @@ def load_cube(
     return cube
 
 
-def load_parquet(filepath: str, filters: Optional[List] = None) -> pd.DataFrame:
+def load_parquet(
+    filepath: str, filters: Optional[List[Tuple[str, str, str]]] = None
+) -> pd.DataFrame:
     """Load the filepath provided to a parquet file into a pandas DataFrame.
 
     Args:
