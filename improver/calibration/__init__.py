@@ -43,7 +43,7 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from iris.coords import AuxCoord, DimCoord
-from iris.cube import Cube, CubeList
+from iris.cube import Cube
 from pandas.core.frame import DataFrame
 from pandas.core.indexes.datetimes import DatetimeIndex
 
@@ -233,7 +233,8 @@ def _unique_check(df: DataFrame, column: str) -> None:
 
 
 def _define_time_coord(
-    adate: pd.Timestamp, time_bounds: Optional[Sequence[pd.Timestamp]] = None,
+    adates: List[pd.Timestamp],
+    all_time_bounds: Optional[Sequence[pd.Timestamp]] = None,
 ) -> DimCoord:
     """Define a time coordinate. The coordinate will have bounds,
     if bounds are provided.
@@ -248,15 +249,22 @@ def _define_time_coord(
         A time coordinate. This coordinate will have bounds, if bounds
         are provided.
     """
+    if all_time_bounds:
+        timestamp_time_bounds = []
+        for a_time_bounds_pair in all_time_bounds:
+            timestamp_time_bounds.append(
+                [
+                    np.array(t.timestamp(), dtype=TIME_COORDS["time"].dtype)
+                    for t in a_time_bounds_pair
+                ]
+            )
+
     return DimCoord(
-        np.array(adate.timestamp(), dtype=TIME_COORDS["time"].dtype),
+        np.array(
+            [adate.timestamp() for adate in adates], dtype=TIME_COORDS["time"].dtype
+        ),
         "time",
-        bounds=time_bounds
-        if time_bounds is None
-        else [
-            np.array(t.timestamp(), dtype=TIME_COORDS["time"].dtype)
-            for t in time_bounds
-        ],
+        bounds=all_time_bounds if all_time_bounds is None else timestamp_time_bounds,
         units=TIME_COORDS["time"].units,
     )
 
@@ -376,6 +384,49 @@ def _prepare_dataframes(
     return forecast_df, truth_df
 
 
+def reshape_forecast_column(
+    df: DataFrame, column: str, training_dates: DatetimeIndex
+) -> np.ndarray:
+    """Reshape a forecast column into the shape required for the output cube.
+
+    Args:
+        df: The forecast DataFrame.
+        column: The name of a column in the forecast DataFrame.
+        training_dates: The validity times within the training period.
+
+    Returns:
+        A column from the forecast DataFrame that has been reshaped into an
+        appropriately shaped numpy array.
+
+    """
+    return np.transpose(
+        np.reshape(
+            df[column].values,
+            (len(training_dates), df["percentile"].nunique(), df["wmo_id"].nunique(),),
+        ),
+        axes=(1, 0, 2),
+    )
+
+
+def reshape_truth_column(
+    df: DataFrame, column: str, training_dates: DatetimeIndex
+) -> np.ndarray:
+    """Reshape a forecast column into the shape required for the output cube.
+
+    Args:
+        df: The truth DataFrame
+        column: The name of a column in the forecast DataFrame.
+        training_dates: The validity times within the training period.
+
+    Returns:
+        A column from the truth DataFrame that has been reshaped into an
+        appropriately shaped numpy array.
+    """
+    return np.reshape(
+        df[column].values, (len(training_dates), df["wmo_id"].nunique(),),
+    )
+
+
 def forecast_dataframe_to_cube(
     df: DataFrame, training_dates: DatetimeIndex, forecast_period: int
 ) -> Cube:
@@ -400,79 +451,81 @@ def forecast_dataframe_to_cube(
 
     fp_point = pd.Timedelta(int(forecast_period), unit="hours")
 
-    cubelist = CubeList()
+    # The following columns are expected to contain one unique value
+    # per column.
+    for col in ["period", "height", "cf_name", "units", "diagnostic"]:
+        _unique_check(df, col)
 
-    for adate in training_dates:
-        time_df = df.loc[(df["time"] == adate) & (df["forecast_period"] == fp_point)]
+    time_df = df.loc[
+        (df["time"].isin(training_dates)) & (df["forecast_period"] == fp_point)
+    ]
 
-        if time_df.empty:
-            continue
-
-        # The following columns are expected to contain one unique value
-        # per column.
-        for col in ["period", "height", "cf_name", "units", "diagnostic"]:
-            _unique_check(time_df, col)
-
-        if time_df["period"].isna().all():
-            time_bounds = None
-            fp_bounds = None
-        else:
-            period = time_df["period"].values[0]
-            time_bounds = [adate - period, adate]
-            fp_bounds = [fp_point - period, fp_point]
-
-        time_coord = _define_time_coord(adate, time_bounds)
-        height_coord = _define_height_coord(time_df["height"].values[0])
-
-        fp_coord = AuxCoord(
-            np.array(
-                fp_point.total_seconds(), dtype=TIME_COORDS["forecast_period"].dtype
-            ),
-            "forecast_period",
-            bounds=fp_bounds
-            if fp_bounds is None
-            else [
-                np.array(f.total_seconds(), dtype=TIME_COORDS["forecast_period"].dtype)
-                for f in fp_bounds
-            ],
-            units=TIME_COORDS["forecast_period"].units,
-        )
-        frt_coord = AuxCoord(
-            np.array(
-                time_df["forecast_reference_time"].values[0].timestamp(),
-                dtype=TIME_COORDS["forecast_reference_time"].dtype,
-            ),
-            "forecast_reference_time",
-            units=TIME_COORDS["forecast_reference_time"].units,
-        )
-
-        for percentile in sorted(df["percentile"].unique()):
-            perc_coord = DimCoord(
-                np.float32(percentile), long_name="percentile", units="%"
-            )
-            perc_df = time_df.loc[time_df["percentile"] == percentile]
-
-            cube = build_spotdata_cube(
-                perc_df["forecast"].astype(np.float32),
-                perc_df["cf_name"].values[0],
-                perc_df["units"].values[0],
-                perc_df["altitude"].astype(np.float32),
-                perc_df["latitude"].astype(np.float32),
-                perc_df["longitude"].astype(np.float32),
-                perc_df["wmo_id"].values.astype("U5"),
-                scalar_coords=[
-                    time_coord,
-                    frt_coord,
-                    fp_coord,
-                    perc_coord,
-                    height_coord,
-                ],
-            )
-            cubelist.append(cube)
-
-    if not cubelist:
+    if time_df.empty:
         return
-    cube = cubelist.merge_cube()
+
+    if time_df["period"].isna().all():
+        fp_bounds = None
+    else:
+        period = time_df["period"].values[0]
+        fp_bounds = [fp_point - period, fp_point]
+
+    if time_df["period"].isna().all():
+        time_bounds = None
+    else:
+        period = time_df["period"].values[0]
+        time_bounds = []
+        for adate in training_dates:
+            time_bounds.append([adate - period, adate])
+
+    time_coord = _define_time_coord(training_dates, time_bounds)
+    height_coord = _define_height_coord(time_df["height"].values[0])
+
+    fp_coord = AuxCoord(
+        np.array(fp_point.total_seconds(), dtype=TIME_COORDS["forecast_period"].dtype),
+        "forecast_period",
+        bounds=fp_bounds
+        if fp_bounds is None
+        else [
+            np.array(f.total_seconds(), dtype=TIME_COORDS["forecast_period"].dtype)
+            for f in fp_bounds
+        ],
+        units=TIME_COORDS["forecast_period"].units,
+    )
+    frt_coord = AuxCoord(
+        np.array(
+            [t.timestamp() for t in time_df["forecast_reference_time"].unique()],
+            dtype=TIME_COORDS["forecast_reference_time"].dtype,
+        ),
+        "forecast_reference_time",
+        units=TIME_COORDS["forecast_reference_time"].units,
+    )
+
+    perc_coord = DimCoord(
+        np.array(sorted(df["percentile"].unique()), dtype=np.float32),
+        long_name="percentile",
+        units="%",
+    )
+
+    cube = build_spotdata_cube(
+        reshape_forecast_column(time_df, "forecast", training_dates).astype(np.float32),
+        time_df["cf_name"].values[0],
+        time_df["units"].values[0],
+        reshape_forecast_column(time_df, "altitude", training_dates).astype(np.float32)[
+            0, 0, :
+        ],
+        reshape_forecast_column(time_df, "latitude", training_dates).astype(np.float32)[
+            0, 0, :
+        ],
+        reshape_forecast_column(time_df, "longitude", training_dates).astype(
+            np.float32
+        )[0, 0, :],
+        reshape_forecast_column(time_df, "wmo_id", training_dates).astype("U5")[
+            0, 0, :
+        ],
+        additional_dims=[perc_coord, time_coord],
+        scalar_coords=[fp_coord, height_coord],
+    )
+    cube.add_aux_coord(frt_coord, data_dims=1)
 
     return RebadgePercentilesAsRealizations()(cube)
 
@@ -493,42 +546,44 @@ def truth_dataframe_to_cube(df: DataFrame, training_dates: DatetimeIndex,) -> Cu
     """
     df = _preprocess_temporal_columns(df)
 
-    cubelist = CubeList()
-    for adate in training_dates:
+    time_df = df.loc[df["time"].isin(training_dates)]
 
-        time_df = df.loc[df["time"] == adate]
-
-        if time_df.empty:
-            continue
-
-        # The following columns are expected to contain one unique value
-        # per column.
-        _unique_check(time_df, "diagnostic")
-
-        if time_df["period"].isna().all():
-            time_bounds = None
-        else:
-            period = time_df["period"].values[0]
-            time_bounds = [adate - period, adate]
-
-        time_coord = _define_time_coord(adate, time_bounds)
-        height_coord = _define_height_coord(time_df["height"].values[0])
-
-        cube = build_spotdata_cube(
-            time_df["ob_value"].astype(np.float32),
-            time_df["cf_name"].values[0],
-            time_df["units"].values[0],
-            time_df["altitude"].astype(np.float32),
-            time_df["latitude"].astype(np.float32),
-            time_df["longitude"].astype(np.float32),
-            time_df["wmo_id"].values.astype("U5"),
-            scalar_coords=[time_coord, height_coord],
-        )
-        cubelist.append(cube)
-
-    if not cubelist:
+    if time_df.empty:
         return
-    return cubelist.merge_cube()
+
+    # The following columns are expected to contain one unique value
+    # per column.
+    _unique_check(time_df, "diagnostic")
+
+    if time_df["period"].isna().all():
+        time_bounds = None
+    else:
+        period = time_df["period"].values[0]
+        time_bounds = []
+        for adate in training_dates:
+            time_bounds.append([adate - period, adate])
+
+    time_coord = _define_time_coord(training_dates, time_bounds)
+    height_coord = _define_height_coord(time_df["height"].values[0])
+
+    cube = build_spotdata_cube(
+        reshape_truth_column(time_df, "ob_value", training_dates).astype(np.float32),
+        time_df["cf_name"].values[0],
+        time_df["units"].values[0],
+        reshape_truth_column(time_df, "altitude", training_dates).astype(np.float32)[
+            0, :
+        ],
+        reshape_truth_column(time_df, "latitude", training_dates).astype(np.float32)[
+            0, :
+        ],
+        reshape_truth_column(time_df, "longitude", training_dates).astype(np.float32)[
+            0, :
+        ],
+        reshape_truth_column(time_df, "wmo_id", training_dates).astype("U5")[0, :],
+        additional_dims=[time_coord],
+        scalar_coords=[height_coord],
+    )
+    return cube
 
 
 def forecast_and_truth_dataframes_to_cubes(
