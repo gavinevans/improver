@@ -37,7 +37,11 @@ from improver import cli
 @cli.clizefy
 @cli.with_output
 def process(
-    reliability_table: cli.inputcube, *, minimum_forecast_count: int = 200,
+    reliability_table: cli.inputcube,
+    *,
+    minimum_forecast_count: int = 200,
+    combine_bins=True,
+    enforce_monotonicity=True,
 ):
     """
     Manipulate a reliability table to ensure sufficient sample counts in
@@ -63,5 +67,9 @@ def process(
     """
     from improver.calibration.reliability_calibration import ManipulateReliabilityTable
 
-    plugin = ManipulateReliabilityTable(minimum_forecast_count=minimum_forecast_count)
+    plugin = ManipulateReliabilityTable(
+        minimum_forecast_count=minimum_forecast_count,
+        combine_bins=combine_bins,
+        enforce_monotonicity=enforce_monotonicity,
+    )
     return plugin(reliability_table)

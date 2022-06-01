@@ -621,7 +621,11 @@ class ManipulateReliabilityTable(BasePlugin):
     """
 
     def __init__(
-        self, minimum_forecast_count: int = 200, point_by_point: bool = False
+        self,
+        minimum_forecast_count: int = 200,
+        point_by_point: bool = False,
+        combine_bins=True,
+        enforce_monotonicity=True,
     ) -> None:
         """
         Initialise class for manipulating a reliability table.
@@ -651,6 +655,8 @@ class ManipulateReliabilityTable(BasePlugin):
             )
         self.minimum_forecast_count = minimum_forecast_count
         self.point_by_point = point_by_point
+        self.combine_bins = combine_bins
+        self.enforce_monotonicity = enforce_monotonicity
 
     @staticmethod
     def _extract_reliability_table_components(
@@ -961,51 +967,53 @@ class ManipulateReliabilityTable(BasePlugin):
             probability_bin_coord,
         ) = self._extract_reliability_table_components(rel_table_slice)
 
-        if np.any(forecast_count < self.minimum_forecast_count):
-            (
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            ) = self._combine_undersampled_bins(
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            )
-            rel_table_slice = self._update_reliability_table(
-                rel_table_slice,
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            )
+        if self.combine_bins:
+            if np.any(forecast_count < self.minimum_forecast_count):
+                (
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                ) = self._combine_undersampled_bins(
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                )
+                rel_table_slice = self._update_reliability_table(
+                    rel_table_slice,
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                )
 
-        # If the observation frequency is non-monotonic adjust the
-        # reliability table
-        observation_frequency = np.array(observation_count / forecast_count)
-        if not np.all(np.diff(observation_frequency) >= 0):
-            (
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            ) = self._combine_bin_pair(
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            )
-            observation_count = self._assume_constant_observation_frequency(
-                observation_count, forecast_count
-            )
-            rel_table_slice = self._update_reliability_table(
-                rel_table_slice,
-                observation_count,
-                forecast_probability_sum,
-                forecast_count,
-                probability_bin_coord,
-            )
+        if self.enforce_monotonicity:
+            # If the observation frequency is non-monotonic adjust the
+            # reliability table
+            observation_frequency = np.array(observation_count / forecast_count)
+            if not np.all(np.diff(observation_frequency) >= 0):
+                (
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                ) = self._combine_bin_pair(
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                )
+                observation_count = self._assume_constant_observation_frequency(
+                    observation_count, forecast_count
+                )
+                rel_table_slice = self._update_reliability_table(
+                    rel_table_slice,
+                    observation_count,
+                    forecast_probability_sum,
+                    forecast_count,
+                    probability_bin_coord,
+                )
         return rel_table_slice
 
     def process(self, reliability_table: Cube) -> CubeList:
