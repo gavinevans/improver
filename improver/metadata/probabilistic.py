@@ -173,6 +173,9 @@ def find_threshold_coordinate(cube: Cube) -> Coord:
             if coord.var_name == "threshold":
                 threshold_coord = coord
                 break
+            elif "spp__relative_to_threshold" in coord.attributes.keys():
+                threshold_coord = coord
+                break
 
     if threshold_coord is None:
         msg = "No threshold coord found on {0:s} data".format(cube.name())

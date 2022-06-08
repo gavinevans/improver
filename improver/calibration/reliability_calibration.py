@@ -967,32 +967,33 @@ class ManipulateReliabilityTable(BasePlugin):
             probability_bin_coord,
         ) = self._extract_reliability_table_components(rel_table_slice)
 
-        if self.combine_bins:
-            if np.any(forecast_count < self.minimum_forecast_count):
-                (
-                    observation_count,
-                    forecast_probability_sum,
-                    forecast_count,
-                    probability_bin_coord,
-                ) = self._combine_undersampled_bins(
-                    observation_count,
-                    forecast_probability_sum,
-                    forecast_count,
-                    probability_bin_coord,
-                )
-                rel_table_slice = self._update_reliability_table(
-                    rel_table_slice,
-                    observation_count,
-                    forecast_probability_sum,
-                    forecast_count,
-                    probability_bin_coord,
-                )
 
-        if self.enforce_monotonicity:
-            # If the observation frequency is non-monotonic adjust the
-            # reliability table
-            observation_frequency = np.array(observation_count / forecast_count)
-            if not np.all(np.diff(observation_frequency) >= 0):
+        if np.any(forecast_count < self.minimum_forecast_count):
+            (
+                observation_count,
+                forecast_probability_sum,
+                forecast_count,
+                probability_bin_coord,
+            ) = self._combine_undersampled_bins(
+                observation_count,
+                forecast_probability_sum,
+                forecast_count,
+                probability_bin_coord,
+            )
+            rel_table_slice = self._update_reliability_table(
+                rel_table_slice,
+                observation_count,
+                forecast_probability_sum,
+                forecast_count,
+                probability_bin_coord,
+            )
+
+
+        # If the observation frequency is non-monotonic adjust the
+        # reliability table
+        observation_frequency = np.array(observation_count / forecast_count)
+        if not np.all(np.diff(observation_frequency) >= 0):
+            if self.combine_bins:
                 (
                     observation_count,
                     forecast_probability_sum,
@@ -1004,16 +1005,17 @@ class ManipulateReliabilityTable(BasePlugin):
                     forecast_count,
                     probability_bin_coord,
                 )
+            if self.enforce_monotonicity:
                 observation_count = self._assume_constant_observation_frequency(
                     observation_count, forecast_count
                 )
-                rel_table_slice = self._update_reliability_table(
-                    rel_table_slice,
-                    observation_count,
-                    forecast_probability_sum,
-                    forecast_count,
-                    probability_bin_coord,
-                )
+            rel_table_slice = self._update_reliability_table(
+                rel_table_slice,
+                observation_count,
+                forecast_probability_sum,
+                forecast_count,
+                probability_bin_coord,
+            )
         return rel_table_slice
 
     def process(self, reliability_table: Cube) -> CubeList:
