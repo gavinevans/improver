@@ -492,6 +492,12 @@ class Test_process(IrisTest):
             result.coord("percentile").points, self.alternative_percentiles
         )
 
+    def test_comment(self):
+        """Test that a comment is added correctly as an attribute to the
+        calibrated forecast."""
+        result = ApplyEMOS()(self.realizations, self.coefficients)
+        self.assertTrue(result.attributes["comment"] is "Calibrated")
+
     def test_invalid_attribute(self):
         """Test that an exception is raised if multiple different distribution
         attributes are provided within the coefficients cubelist."""

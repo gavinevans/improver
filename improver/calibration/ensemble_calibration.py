@@ -2051,4 +2051,7 @@ class ApplyEMOS(PostProcessingPlugin):
             # fill in masked sea points with uncalibrated data
             merge_land_and_sea(result, forecast)
 
+        # Add an attribute to indicate that calibration has been applied.
+        result.attributes["comment"] = "Calibrated"
+
         return result

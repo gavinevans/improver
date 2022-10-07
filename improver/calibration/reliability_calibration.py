@@ -1323,4 +1323,7 @@ class ApplyReliabilityCalibration(PostProcessingPlugin):
             )
             warnings.warn(msg)
 
+        # Add an attribute to indicate that calibration has been applied.
+        calibrated_forecast.attributes["comment"] = "Calibrated"
+
         return calibrated_forecast

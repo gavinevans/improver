@@ -469,6 +469,14 @@ class Test_process(Test_ReliabilityCalibrate):
         assert_allclose(result[1].data, expected_1)
         self.assertFalse(warning_list)
 
+    @ManageWarnings(record=True)
+    def test_comment(self, warning_list=None):
+        """Test that a comment is added correctly as an attribute to the
+        calibrated forecast."""
+        result = self.plugin.process(self.forecast, self.reliability_cube)
+        self.assertTrue(result.attributes["comment"] is "Calibrated")
+        self.assertFalse(warning_list)
+
 
 if __name__ == "__main__":
     unittest.main()
