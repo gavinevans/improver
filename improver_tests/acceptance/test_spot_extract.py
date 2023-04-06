@@ -117,6 +117,29 @@ def test_lapse_adjusting_multiple_percentile_input(tmp_path):
     acc.compare(output_path, kgo_path)
 
 
+def test_fixed_lapse_rate_adjusting(tmp_path):
+    """Test adjusting multiple percentiles from multiple percentile input
+    using a fixed lapse rate."""
+    kgo_dir = acc.kgo_root() / "spot-extract"
+    neighbour_path = kgo_dir / "inputs/all_methods_uk.nc"
+    diag_path = kgo_dir / "inputs/enukx_temperature_percentiles.nc"
+    kgo_path = kgo_dir / "outputs/fixed_lapse_rate_adjusted_multiple_percentile_kgo.nc"
+    output_path = tmp_path / "output.nc"
+    args = [
+        diag_path,
+        neighbour_path,
+        "--output",
+        output_path,
+        "--apply-lapse-rate-correction",
+        "--fixed-lapse-rate",
+        "-6E-3",
+        "--new-title",
+        UK_SPOT_TITLE,
+    ]
+    run_cli(args)
+    acc.compare(output_path, kgo_path)
+
+
 def test_global_extract_on_uk_grid(tmp_path):
     """Test attempting to extract global sites from a UK-only grid"""
     kgo_dir = acc.kgo_root() / "spot-extract"
@@ -129,7 +152,7 @@ def test_global_extract_on_uk_grid(tmp_path):
 
 
 def test_nearest_minimum_dz_unavailable(tmp_path):
-    """Test attempting to extract global sites from a UK-only grid"""
+    """Test attempting to extract with an unavailable neighbour selection method"""
     kgo_dir = acc.kgo_root() / "spot-extract"
     neighbour_path = kgo_dir / "inputs/nearest_uk.nc"
     diag_path = kgo_dir / "inputs/ukvx_temperature.nc"
@@ -179,25 +202,6 @@ def test_lapse_rate_wrong_height(tmp_path):
     ]
     with pytest.raises(CoordinateNotFoundError, match=".*single valued height.*"):
         run_cli(args)
-
-
-def test_new_spot_title(tmp_path):
-    """Test spot extraction with external JSON metadata"""
-    kgo_dir = acc.kgo_root() / "spot-extract"
-    neighbour_path = kgo_dir / "inputs/all_methods_uk.nc"
-    diag_path = kgo_dir / "inputs/ukvx_temperature.nc"
-    kgo_path = kgo_dir / "outputs/nearest_uk_temperatures_amended_metadata.nc"
-    output_path = tmp_path / "output.nc"
-    args = [
-        diag_path,
-        neighbour_path,
-        "--new-title",
-        UK_SPOT_TITLE,
-        "--output",
-        output_path,
-    ]
-    run_cli(args)
-    acc.compare(output_path, kgo_path)
 
 
 def test_lapse_rate_non_temperature(tmp_path):
@@ -499,7 +503,8 @@ def test_no_lapse_rate_data(tmp_path):
         "--new-title",
         UK_SPOT_TITLE,
     ]
-    with pytest.warns(UserWarning, match=".*lapse rate.*"):
+    msg = "A lapse rate cube or fixed lapse rate was not provided"
+    with pytest.warns(UserWarning, match=msg):
         run_cli(args)
 
 
@@ -508,7 +513,7 @@ def test_percentile_from_threshold_with_realizations(tmp_path):
     need collapsing first"""
     kgo_dir = acc.kgo_root() / "spot-extract"
     neighbour_path = kgo_dir / "inputs/all_methods_uk.nc"
-    diag_path = kgo_dir / "inputs/enukx_preciprate_realizations_thresholds.nc"
+    diag_path = kgo_dir / "inputs/enukx_precipacc_realizations_thresholds.nc"
     kgo_path = kgo_dir / "outputs/with_realization_collapse.nc"
     output_path = tmp_path / "output.nc"
     args = [

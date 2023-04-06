@@ -38,14 +38,15 @@ from improver import cli
 @cli.with_output
 def process(
     *cubes: cli.inputcube,
-    apply_lapse_rate_correction=False,
-    land_constraint=False,
-    similar_altitude=False,
+    apply_lapse_rate_correction: bool = False,
+    fixed_lapse_rate: float = None,
+    land_constraint: bool = False,
+    similar_altitude: bool = False,
     extract_percentiles: cli.comma_separated_list = None,
-    ignore_ecc_bounds_exceedance=False,
+    ignore_ecc_bounds_exceedance: bool = False,
     new_title: str = None,
-    suppress_warnings=False,
-    realization_collapse=False,
+    suppress_warnings: bool = False,
+    realization_collapse: bool = False,
 ):
     """Module to run spot data extraction.
 
@@ -67,7 +68,21 @@ def process(
         apply_lapse_rate_correction (bool):
             Use to apply a lapse-rate correction to screen temperature data so
             that the data are a better match the altitude of the spot site for
-            which they have been extracted.
+            which they have been extracted. This lapse rate will be applied for
+            a fixed orographic difference between the site and gridpoint
+            altitude. Differences in orography in excess of this fixed limit
+            will use the Environmental Lapse Rate (also known as the Standard
+            Atmosphere Lapse Rate).
+        fixed_lapse_rate (float):
+            If provided, use this fixed value as a lapse-rate for adjusting
+            the forecast values if apply_lapse_rate_correction is True. This
+            can be used instead of providing a lapse rate cube. Value is
+            given in Kelvin / metre of temperature change with ascent. For
+            example a dry adiabatic lapse rate would be given as -0.0098.
+            This lapse rate will be applied for a fixed orographic difference
+            between the site and gridpoint altitude. Differences in orography
+            in excess of this fixed limit will use the Environmental Lapse
+            Rate (also known as the Standard Atmosphere Lapse Rate).
         land_constraint (bool):
             Use to select the nearest-with-land-constraint neighbour-selection
             method from the neighbour_cube. This means that the grid points
@@ -194,10 +209,16 @@ def process(
                 neighbour_selection_method=neighbour_selection_method
             )
             result = plugin(result, neighbour_cube, cubes[-2])
+        elif fixed_lapse_rate is not None:
+            plugin = SpotLapseRateAdjust(
+                neighbour_selection_method=neighbour_selection_method,
+                fixed_lapse_rate=fixed_lapse_rate,
+            )
+            result = plugin(result, neighbour_cube)
         elif not suppress_warnings:
             warnings.warn(
-                "A lapse rate cube was not provided, but the option to "
-                "apply the lapse rate correction was enabled. No lapse rate "
+                "A lapse rate cube or fixed lapse rate was not provided, but the "
+                "option to apply the lapse rate correction was enabled. No lapse rate "
                 "correction could be applied."
             )
 
