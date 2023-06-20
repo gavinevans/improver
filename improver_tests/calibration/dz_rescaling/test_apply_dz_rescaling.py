@@ -30,11 +30,10 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Unit tests for the ApplyDzRescaling."""
 
+import iris
 import numpy as np
 import pandas as pd
 import pytest
-
-import iris
 from iris.coords import AuxCoord, DimCoord
 from iris.cube import Cube
 
@@ -126,10 +125,12 @@ def _create_scaling_factor_cube():
 
 @pytest.mark.parametrize(
     "forecast_period,expected_data",
-    [(5, [[0.0, 16.5, 5, 10.5], [0, 22, 10, 15.75], [5, 27.5, 15, 21]]),
-     (7, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]]),
-     (11, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]]),
-     (12, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]])],
+    [
+        (5, [[0.0, 16.5, 5, 10.5], [0, 22, 10, 15.75], [5, 27.5, 15, 21]]),
+        (7, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]]),
+        (11, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]]),
+        (12, [[0.0, 18, 5.5, 11.5], [0, 24, 11, 17.25], [5.5, 30, 16.5, 23]]),
+    ],
 )
 def test_apply_dz_rescaling(forecast_period, expected_data):
     """Test the ApplyDzRescaling plugin."""
@@ -148,4 +149,3 @@ def test_apply_dz_rescaling(forecast_period, expected_data):
     assert isinstance(result, Cube)
 
     np.testing.assert_allclose(result.data, expected_data, atol=1e-4, rtol=1e-4)
-

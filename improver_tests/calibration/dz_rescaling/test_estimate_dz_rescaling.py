@@ -30,11 +30,10 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Unit tests for the EstimateDzRescaling."""
 
+import iris
 import numpy as np
 import pandas as pd
 import pytest
-
-import iris
 from iris.coords import AuxCoord
 from iris.cube import Cube
 
@@ -220,4 +219,3 @@ def test_estimate_dz_rescaling(
     assert result.name() == "scaled_vertical_displacement"
     assert result.units == "1"
     np.testing.assert_allclose(result.data, expected_data, atol=1e-4, rtol=1e-4)
-

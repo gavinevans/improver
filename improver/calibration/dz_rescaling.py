@@ -35,10 +35,10 @@ from typing import Dict, Optional, Union
 
 import iris
 import numpy as np
-from numpy.polynomial.polynomial import polyfit
-from numpy.polynomial import Polynomial as poly1d
 from iris.cube import Cube, CubeList
 from numpy import ndarray
+from numpy.polynomial import Polynomial as poly1d
+from numpy.polynomial.polynomial import polyfit
 
 from improver import PostProcessingPlugin
 from improver.calibration.utilities import filter_non_matching_cubes
