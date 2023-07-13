@@ -45,6 +45,7 @@ def process(
     randomise=False,
     random_seed: int = None,
     ignore_ecc_bounds_exceedance=False,
+    skip_ecc_bounds=False,
     tolerate_time_mismatch=False,
     predictor="mean",
     land_sea_mask_name: str = None,
@@ -112,6 +113,12 @@ def process(
             current forecasts is in the form of probabilities and is
             converted to percentiles, as part of converting the input
             probabilities into realizations.
+        skip_ecc_bounds (bool):
+            If True, ECC bounds are not included when percentiles are resampled.
+            This has the effect that percentiles outside of the range given by the
+            input percentiles will be computed by nearest neighbour interpolation
+            from the nearest available percentile, rather than using linear
+            interpolation between the nearest available percentile and the ECC bound.
         tolerate_time_mismatch (bool):
             If True, tolerate a mismatch in validity time and forecast period
             for coefficients vs forecasts. Use with caution!
@@ -161,7 +168,8 @@ def process(
             # regardless of whether EMOS is successfully applied.
             percentiles = [np.float32(p) for p in percentiles]
             forecast = ResamplePercentiles(
-                ecc_bounds_warning=ignore_ecc_bounds_exceedance
+                ecc_bounds_warning=ignore_ecc_bounds_exceedance,
+                skip_ecc_bounds=skip_ecc_bounds,
             )(forecast, percentiles=percentiles)
         elif prob_template:
             forecast = prob_template
@@ -186,7 +194,8 @@ def process(
             # regardless of whether EMOS is successfully applied.
             percentiles = [np.float32(p) for p in percentiles]
             forecast = ResamplePercentiles(
-                ecc_bounds_warning=ignore_ecc_bounds_exceedance
+                ecc_bounds_warning=ignore_ecc_bounds_exceedance,
+                skip_ecc_bounds=skip_ecc_bounds,
             )(forecast, percentiles=percentiles)
 
         msg = (

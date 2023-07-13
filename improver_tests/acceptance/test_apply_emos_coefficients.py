@@ -453,10 +453,17 @@ def test_no_coefficients(tmp_path):
     acc.compare(output_path, kgo_path, atol=LOOSE_TOLERANCE)
 
 
-def test_no_coefficients_percentiles(tmp_path):
+@pytest.mark.parametrize(
+    "bounds_option,kgo",
+    (
+        ("", "with_ecc_bounds_kgo.nc"),
+        ("--skip-ecc-bounds", "without_ecc_bounds_kgo.nc"),
+    ),
+)
+def test_no_coefficients_percentiles(tmp_path, bounds_option, kgo):
     """Test returning alternative percentiles when no coefficients are provided"""
     kgo_dir = acc.kgo_root() / "apply-emos-coefficients/subsetted_percentiles"
-    kgo_path = kgo_dir / "kgo.nc"
+    kgo_path = kgo_dir / kgo
     input_path = kgo_dir / "input.nc"
     output_path = tmp_path / "output.nc"
     args = [
@@ -468,6 +475,8 @@ def test_no_coefficients_percentiles(tmp_path):
         "--output",
         output_path,
     ]
+    if bounds_option:
+        args += [bounds_option]
     with pytest.warns(UserWarning, match=".*no coefficients provided.*"):
         run_cli(args)
     acc.compare(output_path, kgo_path, atol=LOOSE_TOLERANCE)
@@ -614,11 +623,18 @@ def test_mismatching_validity_times_perc_in_prob_out(tmp_path):
     acc.compare(output_path, kgo_path, atol=LOOSE_TOLERANCE, rtol=LOOSE_TOLERANCE)
 
 
-def test_mismatching_validity_times_percentiles(tmp_path):
+@pytest.mark.parametrize(
+    "bounds_option,kgo",
+    (
+        ("", "with_ecc_bounds_kgo.nc"),
+        ("--skip-ecc-bounds", "without_ecc_bounds_kgo.nc"),
+    ),
+)
+def test_mismatching_validity_times_percentiles(tmp_path, bounds_option, kgo):
     """Test passing validity times when the forecast validity time does not match
     any of the validity times within the list. The desired percentiles are supplied."""
     kgo_dir = acc.kgo_root() / "apply-emos-coefficients/subsetted_percentiles"
-    kgo_path = kgo_dir / "kgo.nc"
+    kgo_path = kgo_dir / kgo
     input_path = kgo_dir / "input.nc"
     emos_est_path = (
         acc.kgo_root() / "apply-emos-coefficients/normal/normal_coefficients.nc"
@@ -636,6 +652,8 @@ def test_mismatching_validity_times_percentiles(tmp_path):
         "--output",
         output_path,
     ]
+    if bounds_option:
+        args += [bounds_option]
     run_cli(args)
     # Check output matches kgo.
     acc.compare(output_path, kgo_path, atol=LOOSE_TOLERANCE)
