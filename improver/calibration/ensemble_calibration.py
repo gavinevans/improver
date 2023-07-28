@@ -62,6 +62,7 @@ from improver.calibration.utilities import (
     flatten_ignoring_masked_data,
     forecast_coords_match,
     merge_land_and_sea,
+    standardise_forecast_and_truths,
 )
 from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     ConvertLocationAndScaleParametersToPercentiles,
@@ -636,6 +637,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
         sqrt_pi = np.sqrt(np.pi)
 
         if self.point_by_point:
+            print("Starting processing points independently")
             optimised_coeffs = self._process_points_independently(
                 minimisation_function,
                 initial_guess,
@@ -644,7 +646,9 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
                 forecast_var,
                 sqrt_pi,
             )
+            print("Completed processing points independently")
         else:
+            print("Starting processing points together")
             optimised_coeffs = self._process_points_together(
                 minimisation_function,
                 initial_guess,
@@ -653,6 +657,7 @@ class ContinuousRankedProbabilityScoreMinimisers(BasePlugin):
                 forecast_var,
                 sqrt_pi,
             )
+            print("Completed processing points together")
 
         return optimised_coeffs
 
@@ -1238,6 +1243,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                     ),
                 )
 
+        print("Computed initial guess")
         # Calculate coefficients if there are no nans in the initial guess.
         optimised_coeffs = self.minimiser(
             initial_guess,
@@ -1246,6 +1252,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
             forecast_var,
             self.distribution.lower(),
         )
+        print("Completed minimisation")
         coefficients_cubelist = self.create_coefficients_cubelist(
             optimised_coeffs, historic_forecasts, forecast_predictors
         )
@@ -1258,6 +1265,7 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         truths: Cube,
         additional_fields: Optional[CubeList] = None,
         landsea_mask: Optional[Cube] = None,
+        standardisers: Optional[CubeList] = None,
     ) -> CubeList:
         """
         Using Nonhomogeneous Gaussian Regression/Ensemble Model Output
@@ -1293,6 +1301,11 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 land points are used to calculate the coefficients. Within the
                 land-sea mask cube land points should be specified as ones,
                 and sea points as zeros.
+            standardisers:
+                The climatological forecast mean, climatological forecast
+                standard deviation, the climatological truth mean and climatological
+                truth standard deviation that will be used to standardise the
+                forecasts and observations, respectively.
 
         Returns:
             CubeList constructed using the coefficients provided and using
@@ -1316,9 +1329,11 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
         if not (historic_forecasts and truths):
             raise ValueError("historic_forecasts and truths cubes must be provided.")
 
-        historic_forecasts, truths = filter_non_matching_cubes(
-            historic_forecasts, truths
-        )
+        print("Starting validity time filtering")
+        # historic_forecasts, truths = filter_non_matching_cubes(
+        #     historic_forecasts, truths
+        # )
+        print("Completed validity time filtering")
         check_forecast_consistency(historic_forecasts)
         check_data_sufficiency(
             historic_forecasts, truths, self.point_by_point, self.proportion_of_nans
@@ -1358,6 +1373,13 @@ class EstimateCoefficientsForEnsembleCalibration(BasePlugin):
                 "the coefficients can be estimated."
             )
             raise ValueError(msg)
+
+        if isinstance(standardisers, CubeList):
+            print("Starting standardisation")
+            historic_forecasts, truths = standardise_forecast_and_truths(
+                historic_forecasts, truths, standardisers,
+            )
+            print("Standardised forecasts and truths")
 
         number_of_realizations = None
         if self.predictor == "mean":
@@ -1417,6 +1439,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         self.coefficients_cubelist = None
         self.current_forecast = None
         self.additional_fields = None
+        self.standardisers = None
 
     def __repr__(self) -> str:
         """Represent the configured plugin instance as a string."""
@@ -1494,6 +1517,20 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         forecast_predictors = iris.cube.CubeList(
             [collapsed(self.current_forecast, "realization", iris.analysis.MEAN)]
         )
+
+        if self.standardisers:
+            forecast_mean = iris.AttributeConstraint(
+                climatological_summary="forecast_mean"
+            )
+            forecast_std = iris.AttributeConstraint(
+                climatological_summary="forecast_std"
+            )
+            forecast_predictor_orig = forecast_predictors[0].copy()
+            forecast_predictors[0].data = (
+                forecast_predictors[0].data
+                - self.standardisers.extract_cube(forecast_mean).data
+            ) / self.standardisers.extract_cube(forecast_std).data
+
         if self.additional_fields:
             forecast_predictors.extend(self.additional_fields)
 
@@ -1521,6 +1558,15 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             "emos_coefficient_alpha"
         ).data
         location_parameter = location_parameter.astype(np.float32)
+
+        if self.standardisers:
+            truth_mean = iris.AttributeConstraint(climatological_summary="truth_mean")
+            truth_std = iris.AttributeConstraint(climatological_summary="truth_std")
+            location_parameter = (
+                location_parameter * self.standardisers.extract_cube(truth_std).data
+            ) + self.standardisers.extract_cube(truth_mean).data
+            index = np.isnan(location_parameter)
+            location_parameter[index] = forecast_predictor_orig.data[index]
 
         return location_parameter
 
@@ -1588,17 +1634,48 @@ class CalibratedForecastDistributionParameters(BasePlugin):
             "realization", iris.analysis.VARIANCE
         )
 
-        # Calculating the scale parameter, based on the raw variance S^2,
-        # where predicted scale parameter (or equivalently standard deviation
-        # for a normal distribution) = sqrt(c + dS^2), where c = (gamma)^2 and
-        # d = (delta)^2.
-        scale_parameter = np.sqrt(
-            self.coefficients_cubelist.extract_cube("emos_coefficient_gamma").data
-            * self.coefficients_cubelist.extract_cube("emos_coefficient_gamma").data
-            + self.coefficients_cubelist.extract_cube("emos_coefficient_delta").data
-            * self.coefficients_cubelist.extract_cube("emos_coefficient_delta").data
-            * forecast_var.data
-        ).astype(np.float32)
+        #
+        if self.standardisers:
+            forecast_std = iris.AttributeConstraint(
+                climatological_summary="forecast_std"
+            )
+            truth_std = iris.AttributeConstraint(climatological_summary="truth_std")
+            # Put the forecast variance into the standardised space.
+            # Note that standardising the forecast variance does not depend upon
+            # the forecast mean. This can be deduced by substituting
+            # x_tilde = (x - m) / s where m is the forecast mean and s is the forecast
+            # standard deviation into the standard variance equation.
+            standardised_forecast_var = (
+                forecast_var.data
+                / self.standardisers.extract_cube(forecast_std).data ** 2
+            )
+            # Compute the scale parameter.
+            scale_parameter = (
+                self.coefficients_cubelist.extract_cube("emos_coefficient_gamma").data
+                ** 2
+                + self.coefficients_cubelist.extract_cube("emos_coefficient_delta").data
+                ** 2
+                * standardised_forecast_var
+            )
+            # Revert the standardisation to get the scale parameter in physical space.
+            scale_parameter = np.sqrt(
+                scale_parameter * self.standardisers.extract_cube(truth_std).data ** 2
+            )
+            scale_parameter = scale_parameter.astype(np.float32)
+            index = scale_parameter.mask
+            scale_parameter[index] = forecast_var.data[index]
+        else:
+            # Calculating the scale parameter, based on the raw variance S^2,
+            # where predicted scale parameter (or equivalently standard deviation
+            # for a normal distribution) = sqrt(c + dS^2), where c = (gamma)^2 and
+            # d = (delta)^2.
+            scale_parameter = np.sqrt(
+                self.coefficients_cubelist.extract_cube("emos_coefficient_gamma").data
+                * self.coefficients_cubelist.extract_cube("emos_coefficient_gamma").data
+                + self.coefficients_cubelist.extract_cube("emos_coefficient_delta").data
+                * self.coefficients_cubelist.extract_cube("emos_coefficient_delta").data
+                * forecast_var.data
+            ).astype(np.float32)
         return scale_parameter
 
     def _create_output_cubes(
@@ -1645,6 +1722,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         additional_fields: Optional[CubeList] = None,
         landsea_mask: Optional[Cube] = None,
         tolerate_time_mismatch: Optional[bool] = False,
+        standardisers: Optional[CubeList] = None,
     ) -> Tuple[Cube, Cube]:
         """
         Apply the EMOS coefficients to the current forecast, in order to
@@ -1667,7 +1745,13 @@ class CalibratedForecastDistributionParameters(BasePlugin):
                 sea points to 0.
             tolerate_time_mismatch:
                 If True, tolerate a mismatch in validity time and forecast
-                period for coefficients vs forecasts. Use with caution!
+                    period for coefficients vs forecasts. Use with caution!
+            standardisers:
+                The climatological forecast mean, climatological forecast
+                standard deviation, the climatological truth mean and
+                climatological truth standard deviation that will be used
+                to revert the standardisation of the forecasts and observations,
+                respectively.
 
         Returns:
             - Cube containing the location parameter of the calibrated
@@ -1684,6 +1768,7 @@ class CalibratedForecastDistributionParameters(BasePlugin):
         self.current_forecast = current_forecast
         self.additional_fields = additional_fields
         self.coefficients_cubelist = coefficients_cubelist
+        self.standardisers = standardisers
 
         # Check coefficients_cube and forecast cube are compatible.
         self._diagnostic_match()
@@ -1963,6 +2048,7 @@ class ApplyEMOS(PostProcessingPlugin):
         predictor: str = "mean",
         randomise: bool = False,
         random_seed: Optional[int] = None,
+        standardisers: Optional[CubeList] = None,
     ) -> Cube:
         """Calibrate input forecast using pre-calculated coefficients
 
@@ -2001,6 +2087,12 @@ class ApplyEMOS(PostProcessingPlugin):
             random_seed:
                 Used in generating calibrated realizations.  If input forecast
                 is probabilities or percentiles, this is ignored.
+                and sea points as zeros.
+            standardisers:
+                The climatological forecast mean, climatological forecast
+                standard deviation, the climatological truth mean and climatological
+                truth standard deviation that will be used to revert the
+                standardisation of the forecasts and observations, respectively.
 
         Returns:
             Calibrated forecast in the form of the input (ie probabilities
@@ -2037,6 +2129,7 @@ class ApplyEMOS(PostProcessingPlugin):
             additional_fields=additional_fields,
             landsea_mask=land_sea_mask,
             tolerate_time_mismatch=tolerate_time_mismatch,
+            standardisers=standardisers,
         )
 
         self.distribution = {

@@ -48,6 +48,7 @@ def process(
     predictor="mean",
     tolerance: float = 0.02,
     max_iterations: int = 1000,
+    standardisers=None,
 ):
     """Estimate coefficients for Ensemble Model Output Statistics.
 
@@ -107,19 +108,26 @@ def process(
             is raised. If the predictor is "realizations", then the number of
             iterations may require increasing, as there will be more
             coefficients to solve.
+        standardisers (List):
+            The climatological forecast mean, climatological forecast
+            standard deviation, the climatological truth mean and
+            climatological truth standard deviation that will be used
+            to revert the standardisation of the forecasts and observations,
+            respectively.
 
     Returns:
         iris.cube.CubeList:
             CubeList containing the coefficients estimated using EMOS. Each
             coefficient is stored in a separate cube.
     """
-
     from improver.calibration import split_forecasts_and_truth
     from improver.calibration.ensemble_calibration import (
         EstimateCoefficientsForEnsembleCalibration,
     )
 
+    print("Starting splitting of forecasts and truths")
     forecast, truth, land_sea_mask = split_forecasts_and_truth(cubes, truth_attribute)
+    print("Completed splitting of forecasts and truths")
 
     plugin = EstimateCoefficientsForEnsembleCalibration(
         distribution,
@@ -130,4 +138,6 @@ def process(
         tolerance=tolerance,
         max_iterations=max_iterations,
     )
-    return plugin(forecast, truth, landsea_mask=land_sea_mask)
+    return plugin(
+        forecast, truth, landsea_mask=land_sea_mask, standardisers=standardisers
+    )

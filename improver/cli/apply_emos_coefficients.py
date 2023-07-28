@@ -49,6 +49,7 @@ def process(
     predictor="mean",
     land_sea_mask_name: str = None,
     percentiles: cli.comma_separated_list = None,
+    standardisers=None,
 ):
     """Applying coefficients for Ensemble Model Output Statistics.
 
@@ -127,6 +128,11 @@ def process(
             ensures that only land points will be calibrated.
         percentiles (List[float]):
             The set of percentiles used to create the calibrated forecast.
+        standardisers:
+            The climatological forecast mean, climatological forecast
+            standard deviation, the climatological truth mean and climatological
+            truth standard deviation that will be used to revert the
+            standardisation of the forecasts and observations, respectively.
 
     Returns:
         iris.cube.Cube:
@@ -211,5 +217,6 @@ def process(
         predictor=predictor,
         randomise=randomise,
         random_seed=random_seed,
+        standardisers=standardisers,
     )
     return result

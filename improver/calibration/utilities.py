@@ -481,3 +481,34 @@ def check_data_sufficiency(
                 f"historic forecasts and truth pairs: {proportion_of_nans}."
             )
             raise ValueError(msg)
+
+
+def standardise_forecast_and_truths(
+    historic_forecasts, truths, standardisers,
+):
+    """Standardise the forecast and truths by subtracting the mean and dividing
+    by the standard deviation. The mean and standard deviation have been pre-calculated.
+
+    Args:
+        forecast (iris.cube.Cube)
+        truth (iris.cube.Cube)
+    Returns:
+        Forecasts and truths that have been standardised.
+    """
+    forecast_mean = iris.AttributeConstraint(climatological_summary="forecast_mean")
+    forecast_std = iris.AttributeConstraint(climatological_summary="forecast_std")
+    truth_mean = iris.AttributeConstraint(climatological_summary="truth_mean")
+    truth_std = iris.AttributeConstraint(climatological_summary="truth_std")
+
+    print("standardisers = ", standardisers)
+    standardised_forecast = historic_forecasts.copy()
+    standardised_forecast.data = (
+        historic_forecasts.data - standardisers.extract_cube(forecast_mean).data
+    ) / standardisers.extract_cube(forecast_std).data
+
+    standardised_truth = truths.copy()
+    standardised_truth.data = (
+        truths.data - standardisers.extract_cube(truth_mean).data
+    ) / standardisers.extract_cube(truth_std).data
+    standardised_truth.data = standardised_truth.data.filled(np.nan)
+    return standardised_forecast, standardised_truth
