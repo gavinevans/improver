@@ -70,7 +70,7 @@ def process(*cubes: cli.inputcube, truth_attribute: str):
     from improver.calibration import split_forecasts_and_truth
     from improver.calibration.simple_bias_correction import CalculateForecastBias
 
-    historical_forecast, historical_truth, _ = split_forecasts_and_truth(
+    (historical_forecast, historical_truth, _, _) = split_forecasts_and_truth(
         cubes, truth_attribute
     )
     plugin = CalculateForecastBias()
