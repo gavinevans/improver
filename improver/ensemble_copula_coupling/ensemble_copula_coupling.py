@@ -7,7 +7,7 @@ This module defines the plugins required for Ensemble Copula Coupling.
 
 """
 import warnings
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import iris
 import numpy as np
@@ -379,7 +379,9 @@ class ResamplePercentiles(BasePlugin):
         template_cube = next(forecast_at_percentiles.slices_over(percentile_coord_name))
         template_cube.remove_coord(percentile_coord_name)
         percentile_cube = create_cube_with_percentiles(
-            desired_percentiles, template_cube, forecast_at_percentiles_data,
+            desired_percentiles,
+            template_cube,
+            forecast_at_percentiles_data,
         )
         if original_mask is not None:
             original_mask = np.broadcast_to(original_mask, percentile_cube.shape)
@@ -449,7 +451,9 @@ class ResamplePercentiles(BasePlugin):
             )
 
         forecast_at_percentiles = self._interpolate_percentiles(
-            forecast_at_percentiles, percentiles, percentile_coord.name(),
+            forecast_at_percentiles,
+            percentiles,
+            percentile_coord.name(),
         )
         return forecast_at_percentiles
 
@@ -577,8 +581,10 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
                     upper_bound = max(threshold_points_with_endpoints)
                 if lower_bound > min(threshold_points_with_endpoints):
                     lower_bound = min(threshold_points_with_endpoints)
-                threshold_points_with_endpoints = insert_lower_and_upper_endpoint_to_1d_array(
-                    threshold_points, lower_bound, upper_bound
+                threshold_points_with_endpoints = (
+                    insert_lower_and_upper_endpoint_to_1d_array(
+                        threshold_points, lower_bound, upper_bound
+                    )
                 )
             else:
                 raise ValueError(msg)
@@ -672,15 +678,53 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
             warnings.warn(msg)
 
         # Convert percentiles into fractions.
-        percentiles_as_fractions = np.array(
-            [x / 100.0 for x in percentiles], dtype=np.float32
-        )
+        if isinstance(percentiles, np.ndarray):
+            percentiles_as_fractions = (percentiles / 100).astype(np.float32)
+        else:
+            percentiles_as_fractions = np.array(
+                [x / 100.0 for x in percentiles], dtype=np.float32
+            )
 
-        forecast_at_percentiles = interpolate_multiple_rows_same_y(
-            percentiles_as_fractions.astype(np.float64),
-            probabilities_for_cdf.astype(np.float64),
-            threshold_points.astype(np.float64),
-        )
+        def _interp(percs, probs, thresholds):
+            result = np.empty((probs.shape[0], percs.shape[1]), dtype=np.float32)
+            for i in range(probs.shape[0]):
+                result[i] = np.interp(percs[i, :], probs[i, :], thresholds)
+            return result
+
+        if percentiles_as_fractions.ndim > 1:
+            percentiles_as_fractions = np.transpose(
+                percentiles_as_fractions, axes=(1, 2, 0)
+            )
+            percentiles_as_fractions = np.reshape(
+                percentiles_as_fractions,
+                (
+                    np.multiply(*percentiles_as_fractions.shape[:2]),
+                    percentiles_as_fractions.shape[2],
+                ),
+            )
+            # Shapes: e.g. percentiles_as_fractions (1010740, 18)
+            # probs (1010740, 14)
+            # threshold_points (14)
+            forecast_at_percentiles = _interp(
+                percentiles_as_fractions.astype(np.float64),
+                probabilities_for_cdf.astype(np.float64),
+                threshold_points.astype(np.float64),
+            )
+            percentiles_as_fractions = percentiles_as_fractions.transpose()
+            # For implementation, the code would need to support a 2d percentile
+            # coordinate but for now using any set of percentiles is fine,
+            # because these percentiles will be replaced by realizations anyway.
+            example_percentiles = choose_set_of_percentiles(
+                percentiles_as_fractions.shape[0], sampling="quantile"
+            )
+        else:
+            forecast_at_percentiles = interpolate_multiple_rows_same_y(
+                percentiles_as_fractions.astype(np.float64),
+                probabilities_for_cdf.astype(np.float64),
+                threshold_points.astype(np.float64),
+            )
+            example_percentiles = percentiles
+
         forecast_at_percentiles = forecast_at_percentiles.transpose()
 
         # Reshape forecast_at_percentiles, so the percentiles dimension is
@@ -688,7 +732,7 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
         forecast_at_percentiles = restore_non_percentile_dimensions(
             forecast_at_percentiles,
             next(forecast_probabilities.slices_over(threshold_coord)),
-            len(percentiles),
+            percentiles_as_fractions.shape[0],
         )
 
         if self.mask_percentiles:
@@ -713,7 +757,7 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
         template_cube.remove_coord(threshold_name)
 
         percentile_cube = create_cube_with_percentiles(
-            percentiles,
+            example_percentiles,
             template_cube,
             forecast_at_percentiles,
             cube_unit=threshold_unit,
@@ -729,7 +773,7 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
         self,
         forecast_probabilities: Cube,
         no_of_percentiles: Optional[int] = None,
-        percentiles: Optional[List[float]] = None,
+        percentiles: Optional[Union[List[float], np.ndarray]] = None,
         sampling: str = "quantile",
     ) -> Cube:
         """
@@ -788,7 +832,7 @@ class ConvertProbabilitiesToPercentiles(BasePlugin):
             percentiles = choose_set_of_percentiles(
                 no_of_percentiles, sampling=sampling
             )
-        elif not isinstance(percentiles, (tuple, list)):
+        elif not isinstance(percentiles, (tuple, list, np.ndarray)):
             percentiles = [percentiles]
         percentiles = np.array(percentiles, dtype=np.float32)
 
@@ -820,7 +864,9 @@ class ConvertLocationAndScaleParameters:
     """
 
     def __init__(
-        self, distribution: str = "norm", shape_parameters: Optional[ndarray] = None,
+        self,
+        distribution: str = "norm",
+        shape_parameters: Optional[ndarray] = None,
     ) -> None:
         """
         Initialise the class.
@@ -1087,8 +1133,10 @@ class ConvertLocationAndScaleParametersToPercentiles(
 
         if no_of_percentiles:
             percentiles = choose_set_of_percentiles(no_of_percentiles)
-        calibrated_forecast_percentiles = self._location_and_scale_parameters_to_percentiles(
-            location_parameter, scale_parameter, template_cube, percentiles
+        calibrated_forecast_percentiles = (
+            self._location_and_scale_parameters_to_percentiles(
+                location_parameter, scale_parameter, template_cube, percentiles
+            )
         )
 
         return calibrated_forecast_percentiles
@@ -1472,7 +1520,6 @@ class EnsembleReordering(BasePlugin):
         ):
             for aslice in post_processed_forecast.data.mask[1:, ...]:
                 if np.any(aslice != post_processed_forecast.data.mask[0]):
-
                     message = (
                         "The post_processed_forecast does not have same"
                         " mask on all x-y slices"
