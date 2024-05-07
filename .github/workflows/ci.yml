@@ -48,7 +48,8 @@ jobs:
       run: |
         source '/usr/share/miniconda/etc/profile.d/conda.sh'
         conda activate im${{ matrix.env }}
-        pytest --cov=improver --cov-report xml:coverage.xml
+        ls -l ./improver_tests/acceptance/resources/apply-reliability-calibration/
+        pytest --cov=improver --cov-report xml:coverage.xml ./improver_tests/acceptance/test_apply_reliability_calibration.py
     - name: codacy upload
       if: env.CODACY_PROJECT_TOKEN && matrix.env == 'environment_a'
       run: |
