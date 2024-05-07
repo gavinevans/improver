@@ -42,14 +42,16 @@ jobs:
       run: |
         source '/usr/share/miniconda/etc/profile.d/conda.sh'
         conda activate im${{ matrix.env }}
-        pytest -m "not acc"
+        pytest
     - name: pytest with coverage
       if: matrix.env != 'conda-forge'
       run: |
         source '/usr/share/miniconda/etc/profile.d/conda.sh'
         conda activate im${{ matrix.env }}
+        git lfs fetch
+        sleep 2
         ls -lR ./improver_tests/acceptance/resources/apply-reliability-calibration/
-        pytest --cov=improver --cov-report xml:coverage.xml -m "not acc"
+        pytest --cov=improver --cov-report xml:coverage.xml ./improver_tests/acceptance/test_apply_reliability_calibration.py
     - name: codacy upload
       if: env.CODACY_PROJECT_TOKEN && matrix.env == 'environment_a'
       run: |
