@@ -48,7 +48,7 @@ jobs:
       run: |
         source '/usr/share/miniconda/etc/profile.d/conda.sh'
         conda activate im${{ matrix.env }}
-        git lfs fetch
+        git lfs pull
         sleep 2
         ls -lR ./improver_tests/acceptance/resources/apply-reliability-calibration/
         pytest --cov=improver --cov-report xml:coverage.xml ./improver_tests/acceptance/test_apply_reliability_calibration.py
