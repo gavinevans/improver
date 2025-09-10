@@ -338,14 +338,14 @@ def interpolate_multiple_rows_same_y(*args):
     Returns:
         n * len(x) array where each row i is equal to np.interp(x, xp[i], fp)
     """
-    try:
-        import numba  # noqa: F401
+    # try:
+    #     import numba  # noqa: F401
 
-        from improver.ensemble_copula_coupling.numba_utilities import fast_interp_same_y
+    #     from improver.ensemble_copula_coupling.numba_utilities import fast_interp_same_y
 
-        return fast_interp_same_y(*args)
-    except ImportError:
-        warnings.warn(
-            "Module numba unavailable. ConvertProbabilitiesToPercentiles will be slower."
-        )
-        return slow_interp_same_y(*args)
+    #     return fast_interp_same_y(*args)
+    # except ImportError:
+        # warnings.warn(
+        #     "Module numba unavailable. ConvertProbabilitiesToPercentiles will be slower."
+        # )
+    return slow_interp_same_y(*args)
