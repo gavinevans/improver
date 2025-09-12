@@ -33,6 +33,8 @@ def prep_feature(
     df: pd.DataFrame,
     variable_name: str,
     feature_name: str,
+    transformation: Optional[str] = None,
+    pre_transform_addition: np.float32 = 0,
 ) -> pd.DataFrame:
     """Prepare features that require computation from the input DataFrame. Options
     available are mean and standard deviation of the input feature, the
@@ -50,7 +52,21 @@ def prep_feature(
     Returns:
         df: DataFrame with the computed feature added.
     """
-    if feature_name in ["mean", "std"]:
+    possible_features = [
+        "mean",
+        "std",
+        "skewness",
+        "kurtosis",
+        "interquartile_range",
+        "coefficient_of_variation",
+        "range",
+        "min",
+    ]
+    if (
+        feature_name in possible_features
+        or feature_name.startswith("percentile_")
+        or feature_name.startswith("members_below")
+    ):
         representation_name = [
             n for n in ["percentile", "realization"] if n in df.columns
         ][0]
@@ -65,6 +81,39 @@ def prep_feature(
             subset_df = df[subset_cols].groupby(groupby_cols).mean()
         elif feature_name == "std":
             subset_df = df[subset_cols].groupby(groupby_cols).std()
+        elif feature_name == "skewness":
+            subset_df = df[subset_cols].groupby(groupby_cols).skew()
+        elif feature_name == "kurtosis":
+            subset_df = df[subset_cols].groupby(groupby_cols).apply(pd.DataFrame.kurt)
+        elif feature_name == "interquartile_range":
+            q75 = df[subset_cols].groupby(groupby_cols).quantile(0.75)
+            q25 = df[subset_cols].groupby(groupby_cols).quantile(0.25)
+            subset_df = q75 - q25
+        elif feature_name == "coefficient_of_variation":
+            mean = df[subset_cols].groupby(groupby_cols).mean()
+            std = df[subset_cols].groupby(groupby_cols).std()
+            subset_df = std / mean
+        elif feature_name == "range":
+            max_val = df[subset_cols].groupby(groupby_cols).max()
+            min_val = df[subset_cols].groupby(groupby_cols).min()
+            subset_df = max_val - min_val
+        elif feature_name == "min":
+            subset_df = df[subset_cols].groupby(groupby_cols).min()
+        elif feature_name.startswith("members_below"):
+            threshold = float(feature_name.split("_")[2])
+            threshold = getattr(np, transformation)(
+                np.array(threshold) + pre_transform_addition
+            )
+            subset_df = (
+                df[subset_cols]
+                .assign(below_threshold=lambda x: x[variable_name] < threshold)
+                .groupby(groupby_cols)["below_threshold"]
+                .sum()
+            )
+            subset_df.rename(variable_name, inplace=True)
+        elif feature_name.startswith("percentile_"):
+            perc = float(feature_name.split("_")[1])
+            subset_df = df[subset_cols].groupby(groupby_cols).quantile(perc / 100.0)
 
         subset_df = subset_df.reset_index()
         # Rename the column to distinguish the computed feature from the original.
@@ -133,8 +182,26 @@ def sanitise_forecast_dataframe(
         0
     ]
     collapsed_features = []
+    possible_features = [
+        "mean",
+        "std",
+        "skewness",
+        "kurtosis",
+        "interquartile_range",
+        "coefficient_of_variation",
+        "range",
+        "min",
+    ]
     for key, values in feature_config.items():
-        collapsed_features.extend([key for v in values if v in ["mean", "std"]])
+        collapsed_features.extend(
+            [
+                key
+                for v in values
+                if v in possible_features
+                or v.startswith("percentile_")
+                or v.startswith("members_below")
+            ]
+        )
     collapsed_features = list(set(collapsed_features))
     # Subset the dataframe by the first value of the representation column
     # and drop the representation column and any features where the original variable
@@ -160,10 +227,24 @@ def get_required_column_names(
         ValueError: If a feature expected in the feature_config is not present in
         the DataFrame.
     """
+    possible_features = [
+        "mean",
+        "std",
+        "skewness",
+        "kurtosis",
+        "interquartile_range",
+        "coefficient_of_variation",
+        "range",
+        "min",
+    ]
     feature_column_names = []
     for variable_name in feature_config.keys():
         for feature in feature_config[variable_name]:
-            if feature in ["mean", "std"]:
+            if (
+                feature in possible_features
+                or feature.startswith("percentile_")
+                or feature.startswith("members_below")
+            ):
                 feature_column_names.append(f"{variable_name}_{feature}")
             elif feature in ["static"]:
                 feature_column_names.append(variable_name)
@@ -205,6 +286,17 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
         random_state: Optional[int] = None,
         transformation: Optional[str] = None,
         pre_transform_addition: np.float32 = 0,
+        oversampling_bins: Optional[list] = None,
+        oversampling_weights: Optional[list] = None,
+        sample_to_smallest: Optional[bool] = False,
+        add_oversampling_noise: Optional[bool] = None,
+        sampling_bins: Optional[list] = None,
+        sampling_weights: Optional[list] = None,
+        replicate_with_noise: Optional[bool] = False,
+        n_replicates: Optional[int] = 1,
+        imblearn_oversampling: Optional[str] = None,
+        threshold_bands: Optional[list[float]] = None,
+        threshold_band_decider: Optional[str] = None,
         **kwargs,
     ) -> None:
         """Initialise the plugin.
@@ -257,11 +349,25 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
         self.transformation = transformation
         _check_valid_transformation(self.transformation)
         self.pre_transform_addition = pre_transform_addition
+        self.oversampling_bins = oversampling_bins
+        self.oversampling_weights = oversampling_weights
+        self.sample_to_smallest = sample_to_smallest
+        self.add_oversampling_noise = add_oversampling_noise
+        self.sampling_bins = sampling_bins
+        self.sampling_weights = sampling_weights
+        self.replicate_with_noise = replicate_with_noise
+        self.n_replicates = n_replicates
+        self.imblearn_oversampling = imblearn_oversampling
+        self.threshold_bands = threshold_bands
+        self.threshold_band_decider = threshold_band_decider
         self.kwargs = kwargs
         self.expected_coordinate_order = ["forecast_reference_time", "forecast_period"]
 
     def fit_qrf(
-        self, forecast_features: np.ndarray, target: np.ndarray
+        self,
+        forecast_features: np.ndarray,
+        target: np.ndarray,
+        sample_weights: Optional[np.ndarray] = None,
     ) -> RandomForestQuantileRegressor:
         """Fit the quantile regression random forest model.
         Args:
@@ -278,9 +384,10 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
             max_depth=self.max_depth,
             max_samples=self.max_samples,
             random_state=self.random_state,
+            oob_score=True,
             **self.kwargs,
         )
-        qrf_model.fit(forecast_features, target)
+        qrf_model.fit(forecast_features, target, sample_weight=sample_weights)
         return qrf_model
 
     def process(
@@ -330,9 +437,17 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
                 )
                 raise ValueError(msg)
             for feature_name in self.feature_config[variable_name]:
-                forecast_df = prep_feature(forecast_df, variable_name, feature_name)
+                forecast_df = prep_feature(
+                    forecast_df,
+                    variable_name,
+                    feature_name,
+                    transformation=self.transformation,
+                    pre_transform_addition=self.pre_transform_addition,
+                )
+        # forecast_df.to_parquet("/data/scratch/gavin.evans/temp7/forecast_df.parquet")
 
         forecast_df = sanitise_forecast_dataframe(forecast_df, self.feature_config)
+
         feature_column_names = get_required_column_names(
             forecast_df, self.feature_config
         )
@@ -340,11 +455,186 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
         combined_df = forecast_df.merge(
             truth_df[merge_columns + ["ob_value"]], on=merge_columns, how="inner"
         )
+
+        if self.threshold_bands:
+            qrf_models = []
+            for index, band in enumerate(self.threshold_bands[:-1]):
+                print("bands = ", band, self.threshold_bands[index + 1])
+                if self.transformation is not None:
+                    self.threshold_bands[index] = getattr(np, self.transformation)(
+                        np.array(band) + self.pre_transform_addition
+                    )
+                combined_banded_df = combined_df[
+                    (
+                        combined_df[self.threshold_band_decider]
+                        >= self.threshold_bands[index]
+                    )
+                    & (
+                        combined_df[self.threshold_band_decider]
+                        <= self.threshold_bands[index + 1]
+                    )
+                ]
+                feature_values = np.array(combined_banded_df[feature_column_names])
+                target_values = combined_banded_df["ob_value"].values
+                qrf_models.append(
+                    self.fit_qrf(feature_values, target_values, sample_weights=None)
+                )
+            return qrf_models
+
+        if self.oversampling_bins is not None:
+            bin_edges = getattr(np, self.transformation)(
+                np.array(self.oversampling_bins) + self.pre_transform_addition
+            )
+
+            combined_df["ob_value_group"] = pd.cut(
+                combined_df["ob_value"],
+                bins=bin_edges,
+                labels=False,
+                include_lowest=True,
+            )
+            n_bins = len(bin_edges) - 1
+            rows = len(combined_df.index)
+            n_samples_per_bin = int(np.ceil(rows / n_bins))
+
+            def sampler(df, n_samples_per_bin, weights, random_state):
+                return df.sample(
+                    n_samples_per_bin,
+                    replace=True,
+                    weights=weights,
+                    random_state=random_state,
+                )
+
+            if self.oversampling_weights is None:
+                weights = None
+            else:
+                combined_df["ob_value_group_weight"] = combined_df["ob_value_group"]
+                combined_df["ob_value_group_weight"] = combined_df[
+                    "ob_value_group_weight"
+                ].astype(np.float32)
+                for index, ob_value_group in enumerate(
+                    sorted(combined_df["ob_value_group"].unique())
+                ):
+                    combined_df.loc[
+                        combined_df["ob_value_group"] == ob_value_group,
+                        "ob_value_group_weight",
+                    ] = self.oversampling_weights[index]
+                weights = combined_df["ob_value_group_weight"]
+
+            combined_df = (
+                combined_df.groupby("ob_value_group", group_keys=False)
+                .apply(
+                    sampler,
+                    n_samples_per_bin=n_samples_per_bin,
+                    random_state=self.random_state,
+                    weights=weights,
+                    include_groups=False,
+                )
+                .reset_index(drop=True)
+            )
+
+            if self.add_oversampling_noise is not None:
+                combined_df["duplicates"] = combined_df.duplicated()
+                noise = np.random.default_rng(self.random_state).normal(
+                    loc=0,
+                    scale=combined_df["ob_value"] * 0.01,
+                    size=len(combined_df.index),
+                )
+                combined_df.loc[combined_df["duplicates"], "ob_value"] += noise[
+                    combined_df["duplicates"]
+                ]
+                bound_min = getattr(np, self.transformation)(
+                    self.pre_transform_addition
+                )
+                combined_df["ob_value"] = combined_df["ob_value"].clip(lower=bound_min)
+                combined_df = combined_df.drop(columns=["duplicates"])
+
+        if self.imblearn_oversampling in ["smote", "adasyn", "kmeans_smote"]:
+            from imblearn.over_sampling import ADASYN, SMOTE, KMeansSMOTE
+
+            bin_edges = getattr(np, self.transformation)(
+                np.array(self.oversampling_bins) + self.pre_transform_addition
+            )
+            combined_df["ob_value_group"] = pd.cut(
+                combined_df["ob_value"],
+                bins=bin_edges,
+                labels=False,
+                include_lowest=True,
+            )
+            if self.imblearn_oversampling == "adasyn":
+                sampler = ADASYN(random_state=self.random_state)
+            elif self.imblearn_oversampling == "smote":
+                sampler = SMOTE(random_state=self.random_state)
+            elif self.imblearn_oversampling == "kmeans_smote":
+                sampler = KMeansSMOTE(random_state=self.random_state)
+            X_res, y_res = sampler.fit_resample(
+                combined_df[feature_column_names], combined_df["ob_value_group"]
+            )
+            y_res = combined_df.loc[y_res.index, "ob_value"]
+            combined_df = pd.concat([X_res, y_res], axis=1)
+
+        if self.sampling_weights is None:
+            sample_weights = None
+        else:
+            if self.sampling_bins:
+                bin_edges = getattr(np, self.transformation)(
+                    np.array(self.sampling_bins) + self.pre_transform_addition
+                )
+
+                combined_df["ob_value_group"] = pd.cut(
+                    combined_df["ob_value"],
+                    bins=bin_edges,
+                    labels=False,
+                    include_lowest=True,
+                )
+                combined_df["ob_value_group_weight"] = combined_df["ob_value_group"]
+                combined_df["ob_value_group_weight"] = combined_df[
+                    "ob_value_group_weight"
+                ].astype(np.float32)
+                for index, ob_value_group in enumerate(
+                    sorted(combined_df["ob_value_group"].unique())
+                ):
+                    combined_df.loc[
+                        combined_df["ob_value_group"] == ob_value_group,
+                        "ob_value_group_weight",
+                    ] = self.sampling_weights[index]
+                sample_weights = combined_df["ob_value_group_weight"]
+            else:
+                if self.sampling_weights == "low_values_get_priority":
+                    combined_df = combined_df.sort_values(
+                        by="ob_value", ascending=False
+                    )
+                    sample_weights = np.arange(1, len(combined_df["ob_value"]) + 1)
+
+        if self.replicate_with_noise:
+            combined_df = pd.concat(
+                [combined_df] * self.n_replicates, ignore_index=True
+            )
+            combined_df["duplicates"] = combined_df.duplicated()
+            noise = np.random.default_rng(self.random_state).normal(
+                loc=0,
+                scale=combined_df["ob_value"] * 0.01,
+                size=len(combined_df.index),
+            )
+            combined_df.loc[combined_df["duplicates"], "ob_value"] += noise[
+                combined_df["duplicates"]
+            ]
+            bound_min = getattr(np, self.transformation)(self.pre_transform_addition)
+            bound_max = getattr(np, self.transformation)(combined_df["ob_value"].max())
+            combined_df["ob_value"] = combined_df["ob_value"].clip(
+                lower=bound_min, upper=bound_max
+            )
+            combined_df = combined_df.drop(columns=["duplicates"])
+
+        combined_df.to_parquet("/data/scratch/gavin.evans/temp7/combined_df_trial_127_20251230T0000Z.parquet")
+        import pdb
+        pdb.set_trace()
         feature_values = np.array(combined_df[feature_column_names])
         target_values = combined_df["ob_value"].values
 
         # Fit the quantile regression model
-        return self.fit_qrf(feature_values, target_values)
+        return self.fit_qrf(
+            feature_values, target_values, sample_weights=sample_weights
+        )
 
 
 class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
@@ -357,6 +647,8 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
         quantiles: list[np.float32],
         transformation: str = None,
         pre_transform_addition: np.float32 = 0,
+        threshold_bands: Optional[list[float]] = None,
+        threshold_band_decider: Optional[str] = None,
     ) -> None:
         """Initialise the plugin.
 
@@ -396,6 +688,8 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
         self.transformation = transformation
         _check_valid_transformation(self.transformation)
         self.pre_transform_addition = pre_transform_addition
+        self.threshold_bands = threshold_bands
+        self.threshold_band_decider = threshold_band_decider
 
     def _reverse_transformation(self, forecast: np.ndarray) -> np.ndarray:
         """Reverse the transformation applied to the data prior to fitting the QRF.
@@ -447,12 +741,53 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
                 )
 
             for feature_name in self.feature_config[variable_name]:
-                forecast_df = prep_feature(forecast_df, variable_name, feature_name)
+                forecast_df = prep_feature(
+                    forecast_df,
+                    variable_name,
+                    feature_name,
+                    transformation=self.transformation,
+                    pre_transform_addition=self.pre_transform_addition,
+                )
 
         forecast_df = sanitise_forecast_dataframe(forecast_df, self.feature_config)
         feature_column_names = get_required_column_names(
             forecast_df, self.feature_config
         )
+
+        if self.threshold_bands:
+            if self.transformation is not None:
+                calibrated_forecast1 = np.zeros(
+                    (len(forecast_df.index), len(self.quantiles)), dtype=np.float32
+                )
+                for index, (band, qrf_model1) in enumerate(
+                    zip(self.threshold_bands[:-1], qrf_model)
+                ):
+                    self.threshold_bands[index] = getattr(np, self.transformation)(
+                        np.array(band) + self.pre_transform_addition
+                    )
+                    forecast_banded_df = forecast_df[
+                        (
+                            forecast_df[self.threshold_band_decider]
+                            >= self.threshold_bands[index]
+                        )
+                        & (
+                            forecast_df[self.threshold_band_decider]
+                            <= self.threshold_bands[index + 1]
+                        )
+                    ]
+                    if len(forecast_banded_df.index) == 0:
+                        continue
+                    feature_values = np.array(forecast_banded_df[feature_column_names])
+                    calibrated_forecast = qrf_model1.predict(
+                        feature_values, quantiles=self.quantiles
+                    )
+                    calibrated_forecast = np.float32(calibrated_forecast)
+
+                    calibrated_forecast = self._reverse_transformation(
+                        calibrated_forecast
+                    )
+                    calibrated_forecast1[forecast_banded_df.index] = calibrated_forecast
+                return calibrated_forecast1
 
         feature_values = np.array(forecast_df[feature_column_names])
 
