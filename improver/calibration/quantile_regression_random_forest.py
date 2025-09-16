@@ -61,6 +61,7 @@ def prep_feature(
         "coefficient_of_variation",
         "range",
         "min",
+        "max",
     ]
     if (
         feature_name in possible_features
@@ -99,6 +100,8 @@ def prep_feature(
             subset_df = max_val - min_val
         elif feature_name == "min":
             subset_df = df[subset_cols].groupby(groupby_cols).min()
+        elif feature_name == "max":
+            subset_df = df[subset_cols].groupby(groupby_cols).max()
         elif feature_name.startswith("members_below"):
             threshold = float(feature_name.split("_")[2])
             threshold = getattr(np, transformation)(
@@ -191,6 +194,7 @@ def sanitise_forecast_dataframe(
         "coefficient_of_variation",
         "range",
         "min",
+        "max"
     ]
     for key, values in feature_config.items():
         collapsed_features.extend(
@@ -236,6 +240,7 @@ def get_required_column_names(
         "coefficient_of_variation",
         "range",
         "min",
+        "max"
     ]
     feature_column_names = []
     for variable_name in feature_config.keys():
@@ -625,8 +630,11 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
             )
             combined_df = combined_df.drop(columns=["duplicates"])
 
-        combined_df.to_parquet("/data/scratch/gavin.evans/temp7/combined_df_trial_127_20251230T0000Z.parquet")
+        combined_df.to_parquet(
+            "/data/scratch/gavin.evans/temp7/combined_df_trial_127_20251230T0000Z.parquet"
+        )
         import pdb
+
         pdb.set_trace()
         feature_values = np.array(combined_df[feature_column_names])
         target_values = combined_df["ob_value"].values
