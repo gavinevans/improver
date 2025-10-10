@@ -429,7 +429,9 @@ def _prepare_dataframes(
         forecast_df = forecast_df.loc[forecast_df["experiment"] == experiment]
 
     # Filter to select forecast period.
-    fp_point = pd.Timedelta(int(forecast_period), unit="seconds")
+    fp_point = pd.Timedelta(int(forecast_period), unit="s")
+    # int(forecast_period*100000)  #pd.Timedelta(int(forecast_period*100000), unit="us")
+
     forecast_df = forecast_df[forecast_df["forecast_period"] == fp_point]
 
     if forecast_df["experiment"].nunique() > 1:
@@ -590,7 +592,7 @@ def forecast_dataframe_to_cube(
 
     representation_type = get_forecast_representation(df)
 
-    fp_point = pd.Timedelta(int(forecast_period), unit="seconds")
+    fp_point = pd.Timedelta(int(forecast_period), unit="s")
 
     cubelist = CubeList()
 

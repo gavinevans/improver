@@ -20,6 +20,7 @@ from iris.cube import Cube, CubeList
 from numpy import ndarray
 from numpy.ma.core import MaskedArray
 
+from improver.calibration import CalibrationSchemas
 from improver.utilities.cube_manipulation import enforce_coordinate_ordering
 from improver.utilities.temporal import iris_time_to_datetime
 
@@ -629,18 +630,37 @@ def convert_parquet_to_cube(
         periods=int(training_length),
         freq="D",
     )
+
     filters = [[("diagnostic", "==", diagnostic), ("blend_time", "in", cycletimes)]]
-    forecast_df = pd.read_parquet(forecast, filters=filters)
+    print("Reading forecast data from parquet")
+    forecast_df = pd.read_parquet(
+        forecast,
+        filters=filters,
+        engine="pyarrow",
+        schema=CalibrationSchemas().FORECAST_SCHEMA,
+    )
+    forecast_df["forecast_period"] = pd.to_timedelta(
+        forecast_df["forecast_period"], unit="us"
+    )
 
     # Load truths from parquet file filtering by diagnostic.
     filters = [[("diagnostic", "==", diagnostic)]]
-    truth_df = pd.read_parquet(truth, filters=filters)
+    print("Reading truth data from parquet")
+    truth_df = pd.read_parquet(
+        truth,
+        filters=filters,
+        engine="pyarrow",
+        schema=CalibrationSchemas().TRUTH_SCHEMA,
+    )
     if truth_df.empty:
         msg = (
             f"The requested filepath {truth} does not contain the "
             f"requested contents: {filters}"
         )
         raise IOError(msg)
+
+    if truth_df["station_id"].isnull().all():
+        truth_df.drop(columns=["station_id"], inplace=True)
 
     forecast_cube, truth_cube = forecast_and_truth_dataframes_to_cubes(
         forecast_df,
