@@ -3,7 +3,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to train a model using Quantile Regression Random Forest (QRF)."""
+"""Script to train a decision tree-based model for post-processing."""
 
 from improver import cli
 
@@ -19,21 +19,18 @@ def process(
     cycletime: str,
     training_length: int,
     experiments: cli.comma_separated_list,
-    n_estimators: int = 100,
-    max_depth: int = None,
-    max_samples: float = None,
-    max_features: float = None,
-    random_state: int = None,
+    method: str = "qrf",
+    model_kwargs: cli.inputjson = None,
     transformation: str = None,
     pre_transform_addition: float = 0,
     unique_site_id_keys: cli.comma_separated_list = "wmo_id",
 ):
-    """Training a model using Quantile Regression Random Forest.
+    """Training a decision tree model for post-processing.
 
-    Loads in arguments for training a Quantile Regression Random Forest (QRF)
-    model which can later be applied to calibrate the forecast.
-    Two sources of input data must be provided: historical forecasts and
-    historical truth data (to use in calibration). The model is output as a pickle file.
+    Loads in arguments for training a decision tree-based model which can later
+    be applied to calibrate the forecast. Two sources of input data must be
+    provided: historical forecasts and historical truth data (to use in
+    calibration). The model is output as a pickle file.
 
     Args:
         file_paths (cli.inputpaths):
@@ -49,17 +46,18 @@ def process(
             cf_name, units. Please note that the presence of a forecast_period
             column is used to separate the forecast parquet file from the truth
             parquet file.
-            - Optionally, paths to NetCDF files containing additional preictors.
+            - Optionally, paths to NetCDF files containing additional predictors.
         feature_config (dict):
-            Feature configuration defining the features to be used for quantile
-            regression. The configuration is a dictionary of strings, where the
-            keys are the names of the input cube(s) supplied, and the values are a list.
-            This list can contain both computed features, such as the mean or standard
-            deviation (std), or static features, such as the altitude. The computed
-            features will be computed using the cube defined in the dictionary key.
-            If the key is the feature itself e.g. a distance to water cube, then the
-            value should state "static". This will ensure the cube's data is used as
-            the feature. The config will have the structure:
+            Feature configuration defining the features to be used for the
+            decision tree model. The configuration is a dictionary of strings,
+            where the keys are the names of the input cube(s) supplied, and the
+            values are a list. This list can contain both computed features, such
+            as the mean or standard deviation (std), or static features, such as
+            the altitude. The computed features will be computed using the cube
+            defined in the dictionary key. If the key is the feature itself e.g.
+            a distance to water cube, then the value should state "static". This
+            will ensure the cube's data is used as the feature.
+            The config will have the structure:
             "DYNAMIC_VARIABLE_CF_NAME": ["FEATURE1", "FEATURE2"] e.g:
             {
             "air_temperature": ["mean", "std", "altitude"],
@@ -96,26 +94,17 @@ def process(
             applied to. This is used to filter the forecast DataFrame on load.
             This is expected to be the same length as the parquet_diagnostic_names
             and cf_names lists.
-        n_estimators (int):
-            Number of trees in the forest.
-        max_depth (int):
-            Maximum depth of the tree.
-        max_samples (int | float):
-            If an int, then it is the number of samples to draw from the total number
-            of samples available to train each tree. Note that a 'sample' refers to
-            each row within the DataFrames constructed where each row will differ
-            primarily based on the site, forecast period, forecast reference time and
-            realization or percentile. If a float, then it is the fraction of samples
-            to draw from the total number of samples available to train each tree.
-            If None, then each tree contains the same number of samples as the total
-            available. The trees will therefore only differ due to the use of
-            bootstrapping (i.e. sampling with replacement) when creating each tree.
-        max_features (int | float):
-            If a float, then it is the fraction of features to consider when looking
-            for the best split. If int, then it is the number of features that will
-            be considered at each split. If None, then all features are considered.
-        random_state (int):
-            Random seed for reproducibility.
+        method (str):
+            The decision tree method to use for training. Supported values are
+            ``"qrf"`` (default), ``"lightgbm"``, and ``"xgboost"``.
+        model_kwargs (dict):
+            A JSON dictionary of keyword arguments to pass to the model
+            constructor selected by ``method``. For ``"qrf"`` these correspond
+            to ``RandomForestQuantileRegressor`` parameters (e.g.
+            ``{"n_estimators": 100, "max_depth": 5, "random_state": 0}``).
+            For ``"lightgbm"`` these correspond to ``lgb.LGBMRegressor``
+            parameters. For ``"xgboost"`` these correspond to
+            ``xgb.XGBRegressor`` parameters.
         transformation (str):
             Transformation to be applied to the data before fitting.
         pre_transform_addition (float):
@@ -123,18 +112,17 @@ def process(
         unique_site_id_keys (str):
             The names of the coordinates that uniquely identify each site,
             e.g. "wmo_id" or "latitude,longitude".
-        kwargs: Additional keyword arguments for the quantile regression model.
     Returns:
-        A quantile regression random forest model with associated transformation and
+        A trained decision tree model with associated transformation and
         pre-transformation addition that will be stored as a pickle file.
     """
 
-    from improver.calibration.load_and_train_quantile_regression_random_forest import (
-        LoadForTrainQRF,
-        PrepareAndTrainQRF,
+    from improver.calibration.load_and_train_decision_tree import (
+        LoadForTrainDecisionTree,
+        PrepareAndTrainDecisionTree,
     )
 
-    forecast_df, truth_df, cube_inputs = LoadForTrainQRF(
+    forecast_df, truth_df, cube_inputs = LoadForTrainDecisionTree(
         experiments=experiments,
         feature_config=feature_config,
         parquet_diagnostic_names=parquet_diagnostic_names,
@@ -147,20 +135,14 @@ def process(
     if forecast_df is None or truth_df is None or cube_inputs is None:
         return None
 
-    kwargs = {}
-    if max_features is not None:
-        kwargs["max_features"] = max_features
-    result = PrepareAndTrainQRF(
+    result = PrepareAndTrainDecisionTree(
         feature_config=feature_config,
         target_cf_name=cf_names[0],
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        max_samples=max_samples,
-        random_state=random_state,
+        method=method,
         transformation=transformation,
         pre_transform_addition=pre_transform_addition,
         unique_site_id_keys=unique_site_id_keys,
-        **kwargs,
+        **(model_kwargs or {}),
     )(forecast_df, truth_df, cube_inputs)
     if result == (None, None, None):
         return None

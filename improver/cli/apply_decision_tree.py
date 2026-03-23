@@ -3,7 +3,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to apply a Quantile Regression Random Forest (QRF) model."""
+"""Script to apply a trained decision tree model."""
 
 from improver import cli
 
@@ -14,22 +14,23 @@ def process(
     *file_paths: cli.inputpath,
     feature_config: cli.inputjson,
     target_cf_name: str,
+    method: str = "qrf",
     unique_site_id_keys: cli.comma_separated_list = "wmo_id",
     cycletime: str = None,
     forecast_period: int = None,
 ):
     """Applying the Quantile Regression Random Forest model.
 
-    Loads in arguments for applying a Quantile Regression Random Forest (QRF)
+    Loads in arguments for applying a trained decision tree
     model which has been previously trained.
-    Two sources of input data must be provided: The QRF model and the forecast cube
+    Two sources of input data must be provided: The trained model and the forecast cube
     to be calibrated. The output is a NetCDF file containing the calibrated forecast.
 
     Args:
         file_paths (cli.inputpaths):
             A list of input paths containing:
-            - The path to the pickle file produced by training the QRF model.
-            The pickle file contains the QRF model and the transformation and
+            - The path to the pickle file produced by training the decision tree model.
+            The pickle file contains the trained model and the transformation and
             pre_transform_addition values if a transformation was applied. If no
             transformation was applied then the transformation and
             pre_transform_addition values will be None and 0, respectively.
@@ -55,6 +56,9 @@ def process(
             A string containing the CF name of the forecast to be
             calibrated e.g. air_temperature. This will be used to separate it from
             the rest of the feature cubes, if present.
+        method (str):
+            The decision tree method used to train the model. Supported values are
+            ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``. Defaults to ``"qrf"``.
         unique_site_id_keys (str):
             The names of the coordinates that uniquely identify each site,
             e.g. "wmo_id" or "latitude,longitude".
@@ -71,17 +75,18 @@ def process(
             The calibrated forecast cube.
     """
     from improver.calibration import split_netcdf_parquet_pickle
-    from improver.calibration.load_and_apply_quantile_regression_random_forest import (
-        PrepareAndApplyQRF,
+    from improver.calibration.load_and_apply_decision_tree import (
+        PrepareAndApplyDecisionTree,
     )
 
-    cubes, _, qrf_descriptors = split_netcdf_parquet_pickle(file_paths)
+    cubes, _, model_descriptors = split_netcdf_parquet_pickle(file_paths)
 
-    result = PrepareAndApplyQRF(
+    result = PrepareAndApplyDecisionTree(
         feature_config=feature_config,
         target_cf_name=target_cf_name,
+        method=method,
         unique_site_id_keys=unique_site_id_keys,
         cycletime=cycletime,
         forecast_period=forecast_period,
-    )(cubes, qrf_descriptors=qrf_descriptors)
+    )(cubes, model_descriptors=model_descriptors)
     return result

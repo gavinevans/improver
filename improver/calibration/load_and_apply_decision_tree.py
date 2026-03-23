@@ -3,11 +3,10 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to load and apply the trained Quantile Regression Random Forest (QRF)
-model."""
+"""Script to load and apply a trained decision tree model."""
 
 import warnings
-from typing import Optional
+from typing import Any, Optional
 
 import iris
 import numpy as np
@@ -17,33 +16,25 @@ from iris.pandas import as_data_frame
 
 from improver import PostProcessingPlugin
 from improver.calibration import add_static_feature_from_cube_to_df, add_warning_comment
-from improver.calibration.quantile_regression_random_forest import (
-    ApplyQuantileRegressionRandomForests,
-    quantile_forest_package_available,
+from improver.calibration.decision_tree import (
+    ApplyDecisionTreeModel,
 )
 from improver.ensemble_copula_coupling.utilities import choose_set_of_percentiles
 from improver.utilities.cube_checker import assert_spatial_coords_match
 from improver.utilities.temporal import datetime_to_iris_time
 
-try:
-    from quantile_forest import RandomForestQuantileRegressor
-except ModuleNotFoundError:
-    # Define empty class to avoid type hint errors.
-    class RandomForestQuantileRegressor:
-        pass
-
-
 iris.FUTURE.pandas_ndim = True
 
 
-class PrepareAndApplyQRF(PostProcessingPlugin):
-    """Prepare the input forecast for application of a trained Quantile Regression
-    Random Forest (QRF) model and apply the QRF model."""
+class PrepareAndApplyDecisionTree(PostProcessingPlugin):
+    """Prepare the input forecast for application of a trained decision tree model
+    and apply the model."""
 
     def __init__(
         self,
         feature_config: dict[str, list[str]],
         target_cf_name: str,
+        method: str = "qrf",
         unique_site_id_keys: list[str] = ["wmo_id"],
         cycletime: Optional[str] = None,
         forecast_period: Optional[int] = None,
@@ -72,6 +63,10 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
                 A string containing the CF name of diagnostic to be calibrated. This
                 will be used to separate it from the rest of the dynamic predictors,
                 if present.
+            method (str):
+                Name of the decision tree method that was used to train the model.
+                Supported values are ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``.
+                Defaults to ``"qrf"``.
             unique_site_id_keys (list):
                 The names of the coordinates that uniquely identify each site,
                 e.g. "wmo_id" or ["latitude", "longitude"].
@@ -86,25 +81,25 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
         """
         self.feature_config = feature_config
         self.target_cf_name = target_cf_name
+        self.method = method
         self.unique_site_id_keys = unique_site_id_keys
         self.cycletime = cycletime
         self.forecast_period = forecast_period
-        self.quantile_forest_installed = quantile_forest_package_available()
 
     def _get_inputs(
         self,
         cube_inputs: iris.cube.CubeList,
-        qrf_model: Optional[RandomForestQuantileRegressor] = None,
+        model: Optional[Any] = None,
     ) -> tuple[CubeList, Cube]:
         """Split the forecast to be calibrated from the other features. Handle
-        the case where the qrf_model is not provided, for example, if the input
-        data required to train the QRF model isn't yet available. In this case,
+        the case where the model is not provided, for example, if the input
+        data required to train the model isn't yet available. In this case,
         the uncalibrated forecast is returned with a warning comment added.
 
         Args:
             cube_inputs: List of cubes containing the features and the forecast to be
                 calibrated.
-            qrf_model: The trained QRF model to be applied to the forecast. If None,
+            model: The trained model to be applied to the forecast. If None,
                 the input forecast will be returned unchanged with a warning comment
                 added.
 
@@ -133,7 +128,7 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
             )
             raise ValueError(msg)
 
-        if not qrf_model:
+        if not model:
             # If no model is provided, return the input forecast with a warning.
             forecast_cube = add_warning_comment(forecast_cube)
             return None, forecast_cube
@@ -189,7 +184,7 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
         """Update the forecast_reference_time and forecast_period coordinates
         on the input cubes to match those provided, if they are provided. The rebadging
         of the forecast_period introduces a slight discrepancy between the forecasts
-        used for training and application of the QRF model. However, as any forecast
+        used for training and application of the decision tree model. However, as any forecast
         period rebadging is expected to be small (e.g. a few hours), this is not
         expected to be a significant issue.
 
@@ -268,45 +263,41 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
     def process(
         self,
         cube_inputs: CubeList,
-        qrf_descriptors: Optional[
-            tuple[RandomForestQuantileRegressor, str, float]
-        ] = None,
+        model_descriptors: Optional[tuple[Any, str, float]] = None,
     ) -> Cube:
-        """Load and apply the trained Quantile Regression Random Forest (QRF) model.
-        The model is used to calibrated the forecast provided. The calibrated forecast
-        is written to a cube. If no model is provided the input forecast is returned
-        unchanged.
+        """Load and apply the trained decision tree model. The model is used to
+        calibrate the forecast provided. The calibrated forecast is written to a cube.
+        If no model is provided the input forecast is returned unchanged.
 
         Args:
             cube_inputs: List of cubes containing the features and the forecast to be
                 calibrated.
-            qrf_descriptors: The trained QRF model to be applied to the forecast
+            model_descriptors: The trained model to be applied to the forecast
                 and the transformation and pre-transform addition applied during
                 training. The descriptors expected are a tuple of:
-                (qrf_model, transformation, pre_transform_addition).
+                (model, transformation, pre_transform_addition).
 
         Returns:
             iris.cube.Cube:
                 The calibrated forecast cube.
         """
-        if qrf_descriptors is None:
+        if model_descriptors is None:
             # If no descriptors are provided, return the input forecast with a warning.
-            # Descriptors expected: (qrf_model, transformation, pre_transform_addition)
-            qrf_descriptors = (None, None, 0)
-        qrf_model, transformation, pre_transform_addition = qrf_descriptors
+            # Descriptors expected: (model, transformation, pre_transform_addition)
+            model_descriptors = (None, None, 0)
+        model, transformation, pre_transform_addition = model_descriptors
 
-        cube_inputs, forecast_cube = self._get_inputs(cube_inputs, qrf_model=qrf_model)
+        cube_inputs, forecast_cube = self._get_inputs(cube_inputs, model=model)
 
         if cube_inputs:
             assert_spatial_coords_match(cube_inputs)
 
-        if not self.quantile_forest_installed or not qrf_model:
-            msg = "Unable to apply Quantile Regression Random Forest model."
-            if not self.quantile_forest_installed:
-                msg += " The 'quantile_forest' package is not installed."
-            elif not qrf_model:
-                msg += " No trained model has been provided."
-            msg += " Returning the input forecast without calibration."
+        if not model:
+            msg = (
+                "Unable to apply the decision tree model. "
+                "No trained model has been provided. "
+                "Returning the input forecast without calibration."
+            )
             warnings.warn(msg)
             return forecast_cube
 
@@ -322,14 +313,15 @@ class PrepareAndApplyQRF(PostProcessingPlugin):
 
         df = self._cube_to_dataframe(cube_inputs)
 
-        calibrated_forecast = ApplyQuantileRegressionRandomForests(
+        calibrated_forecast = ApplyDecisionTreeModel(
             target_name=self.target_cf_name,
             feature_config=self.feature_config,
             quantiles=quantile_list,
+            method=self.method,
             transformation=transformation,
             pre_transform_addition=pre_transform_addition,
             unique_site_id_keys=self.unique_site_id_keys,
-        )(qrf_model, df)
+        )(model, df)
         calibrated_forecast_cube = template_forecast_cube.copy(
             data=np.broadcast_to(calibrated_forecast.T, template_forecast_cube.shape)
         )

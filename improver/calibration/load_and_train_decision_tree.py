@@ -2,13 +2,12 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to load inputs and train a model using Quantile Regression Random Forest
-(QRF)."""
+"""Script to load inputs and train a decision tree-based model."""
 
 import pathlib
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import iris
 import numpy as np
@@ -23,22 +22,14 @@ from improver.calibration import (
     identify_parquet_type,
     split_netcdf_parquet_pickle,
 )
-from improver.calibration.quantile_regression_random_forest import (
-    TrainQuantileRegressionRandomForests,
-    quantile_forest_package_available,
+from improver.calibration.decision_tree import (
+    TrainDecisionTreeModel,
+    _check_valid_transformation,
 )
 
-try:
-    from quantile_forest import RandomForestQuantileRegressor
-except ModuleNotFoundError:
-    # Define empty class to avoid type hint errors.
-    class RandomForestQuantileRegressor:
-        pass
 
-
-class LoadForTrainQRF(PostProcessingPlugin):
-    """Plugin to load input files for training a Quantile Regression Random Forest
-    (QRF) model."""
+class LoadForTrainDecisionTree(PostProcessingPlugin):
+    """Plugin to load input files for training a decision tree-based model."""
 
     def __init__(
         self,
@@ -51,11 +42,11 @@ class LoadForTrainQRF(PostProcessingPlugin):
         experiments: list[str],
         unique_site_id_keys: Union[list[str], str] = "wmo_id",
     ):
-        """Initialise the LoadForTrainQRF plugin.
+        """Initialise the LoadForTrainDecisionTree plugin.
 
         Args:
             feature_config: Feature configuration defining the features to be used for
-                Quantile Regression Random Forests.
+                the decision tree model.
             parquet_diagnostic_names: A list containing the diagnostic names that will
                 be used for filtering the forecast and truth DataFrames read in from
                 the parquet files. The target diagnostic name is expected to be the
@@ -84,7 +75,6 @@ class LoadForTrainQRF(PostProcessingPlugin):
             unique_site_id_key: The names of the coordinates that uniquely identify
                 each site, e.g. "wmo_id" or "latitude,longitude".
         """
-        self.quantile_forest_installed = quantile_forest_package_available()
         self.feature_config = feature_config
         self.parquet_diagnostic_names = parquet_diagnostic_names
         self.cf_names = cf_names
@@ -288,8 +278,8 @@ class LoadForTrainQRF(PostProcessingPlugin):
         self,
         file_paths: list[pathlib.Path | str],
     ) -> Optional[tuple[iris.cube.CubeList, pathlib.Path | str, pathlib.Path | str]]:
-        """Load input files for training a Quantile Regression Random Forest (QRF)
-        model. Two sources of input data must be provided: historical forecasts and
+        """Load input files for training a decision tree-based model.
+        Two sources of input data must be provided: historical forecasts and
         historical truth data (to use in calibration).
 
         Args:
@@ -315,13 +305,10 @@ class LoadForTrainQRF(PostProcessingPlugin):
                 - List of cubes containing additional features.
 
             A tuple of (None, None, None) is returned if:
-                - The quantile_forest package is not installed.
                 - No parquet files are provided.
                 - Either the forecast or truth parquet files are missing.
 
         """
-        if not self.quantile_forest_installed:
-            return None, None, None
         cube_inputs, parquets, _ = split_netcdf_parquet_pickle(file_paths)
 
         # If there are no parquet files, return None.
@@ -368,53 +355,52 @@ class LoadForTrainQRF(PostProcessingPlugin):
         return forecast_df, truth_df, cube_inputs
 
 
-class PrepareAndTrainQRF(PostProcessingPlugin):
-    """Plugin to prepare and train a Quantile Regression Random Forest (QRF) model."""
+class PrepareAndTrainDecisionTree(PostProcessingPlugin):
+    """Plugin to prepare data and train a decision tree-based model."""
 
     def __init__(
         self,
         feature_config: dict[str, list[str]],
         target_cf_name: str,
-        n_estimators: int = 100,
-        max_depth: Optional[int] = None,
-        max_samples: Optional[float] = None,
-        random_state: Optional[int] = None,
+        method: str,
         transformation: Optional[str] = None,
         pre_transform_addition: float = 0,
         unique_site_id_keys: Union[list[str], str] = "wmo_id",
-        **kwargs,
+        valid_forecast_proportion: float = 0.5,
+        **model_kwargs,
     ):
-        """Initialise the PrepareAndTrainQRF plugin.
+        """Initialise the PrepareAndTrainDecisionTree plugin.
 
         Args:
             feature_config: Feature configuration defining the features to be used for
-                Quantile Regression Random Forests.
+                the decision tree model.
             target_cf_name: A string containing the CF name of the forecast to be
                 calibrated e.g. air_temperature.
-            n_estimators: The number of trees in the forest.
-            max_depth: The maximum depth of the trees.
-            max_samples: The maximum number of samples to draw from the total number of
-                samples to train each tree.
-            random_state: Seed used by the random number generator.
+            method: Name of the decision tree method to use, e.g. ``"qrf"``. This is
+                passed to :class:`TrainDecisionTreeModel`, which is
+                responsible for constructing and fitting the appropriate model.
             transformation: Transformation to be applied to the data before fitting.
             pre_transform_addition: Value to be added before transformation.
-            unique_site_id_key: The names of the coordinates that uniquely identify
+            unique_site_id_keys: The names of the coordinates that uniquely identify
                 each site, e.g. "wmo_id" or ["latitude", "longitude"].
-            kwargs: Additional keyword arguments for the quantile regression model.
+            valid_forecast_proportion: The maximum fraction of forecast rows that
+                may be dropped due to NaNs. Exceeding this fraction raises a
+                ValueError.
+            model_kwargs: Keyword arguments forwarded to the model constructor via
+                :class:`TrainDecisionTreeModel` (e.g. ``n_estimators``,
+                ``max_depth``, ``random_state`` for ``"qrf"``).
         """
         self.feature_config = feature_config
         self.target_cf_name = target_cf_name
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
-        self.max_samples = max_samples
-        self.random_state = random_state
+        self.method = method
+        self.model_kwargs = model_kwargs
         self.transformation = transformation
+        _check_valid_transformation(self.transformation)
         self.pre_transform_addition = pre_transform_addition
         if isinstance(unique_site_id_keys, str):
             unique_site_id_keys = [unique_site_id_keys]
         self.unique_site_id_keys = unique_site_id_keys
-        self.kwargs = kwargs
-        self.quantile_forest_installed = quantile_forest_package_available()
+        self.valid_forecast_proportion = valid_forecast_proportion
         self.float_decimals = 4
 
     @staticmethod
@@ -527,11 +513,11 @@ class PrepareAndTrainQRF(PostProcessingPlugin):
         forecast_df: pd.DataFrame,
         truth_df: pd.DataFrame,
         cube_inputs: Optional[iris.cube.CubeList] = None,
-    ) -> Optional[tuple[RandomForestQuantileRegressor, str, float]]:
-        """Load input files and train a Quantile Regression Random Forest (QRF)
-        model. This model can be applied later to calibrate the forecast. Two sources
-        of input data must be provided: historical forecasts and historical truth data
-        (to use in calibration). The model is output as a pickle file.
+    ) -> Optional[tuple[Any, Optional[str], float]]:
+        """Prepare input data and train a decision tree-based model. The model
+        can be applied later to calibrate the forecast. Two sources of input data
+        must be provided: historical forecasts and historical truth data.
+        The model is output as a pickle file.
 
         Args:
             forecast_df: DataFrame containing the forecast data.
@@ -539,7 +525,7 @@ class PrepareAndTrainQRF(PostProcessingPlugin):
             cube_inputs: List of cubes containing additional features.
 
         Returns: A tuple containing:
-            - The trained RandomForestQuantileRegressor model.
+            - The trained model.
             - The transformation applied to the data before fitting.
             - The value added before transformation.
 
@@ -547,14 +533,11 @@ class PrepareAndTrainQRF(PostProcessingPlugin):
             ValueError: If there are no matching times between the forecast and truth
                 data.
         """
-        if not self.quantile_forest_installed:
-            return None, None, None
-
         intersecting_times = self._check_matching_times(forecast_df, truth_df)
         if len(intersecting_times) == 0:
             msg = (
                 "No matching times between the forecast and truth data. "
-                "Unable to train the Quantile Regression Random Forest model."
+                "Unable to train the decision tree model."
             )
             warnings.warn(msg)
             return None, None, None
@@ -564,19 +547,17 @@ class PrepareAndTrainQRF(PostProcessingPlugin):
         )
         forecast_df, truth_df = self.filter_bad_sites(forecast_df, truth_df)
 
-        result = TrainQuantileRegressionRandomForests(
+        trainer = TrainDecisionTreeModel(
             target_name=self.target_cf_name,
             feature_config=self.feature_config,
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            max_samples=self.max_samples,
-            random_state=self.random_state,
+            method=self.method,
             transformation=self.transformation,
             pre_transform_addition=self.pre_transform_addition,
             unique_site_id_keys=self.unique_site_id_keys,
-            **self.kwargs,
-        )(forecast_df, truth_df)
-
-        # Create a tuple that returns the model, transformation and
-        # pre_transform_addition to allow these to be saved together.
-        return (result, self.transformation, self.pre_transform_addition)
+            valid_forecast_proportion=self.valid_forecast_proportion,
+            **self.model_kwargs,
+        )
+        model = trainer.process(forecast_df, truth_df)
+        # Return as a tuple so that the transformation and pre_transform_addition
+        # are stored alongside the model.
+        return (model, self.transformation, self.pre_transform_addition)

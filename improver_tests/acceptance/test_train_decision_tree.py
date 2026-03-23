@@ -3,8 +3,7 @@
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
 """
-Tests for the train-quantile-regression-random-forest CLI
-
+Tests for the train-decision-tree CLI
 """
 
 import pytest
@@ -28,8 +27,7 @@ def test_basic(
     transformation,
 ):
     """
-    Test train-quantile-regression-random-forest CLI with and without a transformation
-    applied.
+    Test train-decision-tree CLI with and without a transformation applied.
     """
     kgo_dir = acc.kgo_root() / CLI
     kgo_path = kgo_dir / f"{transformation}_kgo.pickle"
@@ -53,12 +51,8 @@ def test_basic(
         "2",
         "--experiments",
         "mix-latestblend",
-        "--n-estimators",
-        "10",
-        "--max-depth",
-        "5",
-        "--random-state",
-        "42",
+        "--model-kwargs",
+        '{"n_estimators": 10, "max_depth": 5, "random_state": 42}',
         "--compression-level",
         "5",
         "--output",
@@ -80,7 +74,7 @@ def test_missing_inputs(
     tmp_path,
 ):
     """
-    Test train-quantile-regression-random-forest CLI with missing parquet inputs.
+    Test train-decision-tree CLI with missing parquet inputs.
     """
     kgo_dir = acc.kgo_root() / CLI
     config_path = kgo_dir / "config.json"
@@ -101,12 +95,8 @@ def test_missing_inputs(
         "2",
         "--experiments",
         "mix-latestblend",
-        "--n-estimators",
-        "10",
-        "--max-depth",
-        "5",
-        "--random-state",
-        "42",
+        "--model-kwargs",
+        '{"n_estimators": 10, "max_depth": 5, "random_state": 42}',
         "--compression-level",
         "5",
         "--output",
@@ -122,9 +112,8 @@ def test_invalid_cycletime(
     tmp_path,
 ):
     """
-    Test train-quantile-regression-random-forest CLI when no training can occur
-    because there is no valid data in the parquet files to calibrate the cycletime
-    provided.
+    Test train-decision-tree CLI when no training can occur because there is no
+    valid data in the parquet files to calibrate the cycletime provided.
     """
     kgo_dir = acc.kgo_root() / CLI
     config_path = kgo_dir / "config.json"
@@ -147,12 +136,8 @@ def test_invalid_cycletime(
         "2",
         "--experiments",
         "mix-latestblend",
-        "--n-estimators",
-        "10",
-        "--max-depth",
-        "5",
-        "--random-state",
-        "42",
+        "--model-kwargs",
+        '{"n_estimators": 10, "max_depth": 5, "random_state": 42}',
         "--compression-level",
         "5",
         "--output",

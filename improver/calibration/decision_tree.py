@@ -2,9 +2,9 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Plugins to perform quantile regression using random forests."""
+"""Plugins for training and applying decision tree models."""
 
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,24 @@ def quantile_forest_package_available():
     """Return True if quantile_forest package is available, False otherwise."""
     try:
         from quantile_forest import RandomForestQuantileRegressor  # noqa F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def lightgbm_package_available():
+    """Return True if lightgbm package is available, False otherwise."""
+    try:
+        import lightgbm  # noqa F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def xgboost_package_available():
+    """Return True if xgboost package is available, False otherwise."""
+    try:
+        import xgboost  # noqa F401
     except ModuleNotFoundError:
         return False
     return True
@@ -210,7 +228,7 @@ def sanitise_forecast_dataframe(
 
     Args:
         df: Input DataFrame, potentially including some computed features.
-        feature_config: Feature configuration defining the features to be used for QRF.
+        feature_config: Feature configuration defining the features to be used for the decision tree model.
     """
     representation_name = [n for n in ["percentile", "realization"] if n in df.columns][
         0
@@ -275,11 +293,11 @@ def prep_features_from_config(
     unique_site_id_keys: Union[list[str], str] = "wmo_id",
 ) -> tuple[pd.DataFrame, list[str]]:
     """Process the feature_config to prepare the features as required and return the
-    expected column names that will be used as features with the QRF.
+    expected column names that will be used as features with the decision tree model.
 
     Args:
         df: Input DataFrame.
-        feature_config: Feature configuration defining the features to be used for QRF.
+        feature_config: Feature configuration defining the features to be used for the decision tree model.
         transformation: Transformation to be applied to the data before fitting. This
             is only used when computing members_below or members_above features.
         pre_transform_addition: Value to be added before transformation. This is only
@@ -288,7 +306,7 @@ def prep_features_from_config(
             each site, e.g. "wmo_id" or ["latitude", "longitude"].
     Returns:
         Processed DataFrame and a list of expected column names that will be used as
-        features with the QRF.
+        features with the decision tree model.
     Raises:
         ValueError: If a variable expected in the feature_config is not present in
         the DataFrame e.g. "surface temperature".
@@ -366,21 +384,19 @@ def apply_transformation(
     return data
 
 
-class TrainQuantileRegressionRandomForests(BasePlugin):
-    """Plugin to train a model using quantile regression random forests."""
+class TrainDecisionTreeModel(BasePlugin):
+    """Plugin to train a decision tree model (e.g. QRF, LightGBM, XGBoost)."""
 
     def __init__(
         self,
         target_name: str,
         feature_config: dict[str, list[str]],
-        n_estimators: int,
-        max_depth: Optional[int] = None,
-        max_samples: Optional[float] = None,
-        random_state: Optional[int] = None,
+        method: str = "qrf",
         transformation: Optional[str] = None,
         pre_transform_addition: np.float32 = 0,
         unique_site_id_keys: Union[list[str], str] = "wmo_id",
-        **kwargs,
+        valid_forecast_proportion: float = 0.5,
+        **model_kwargs,
     ) -> None:
         """Initialise the plugin.
 
@@ -403,74 +419,93 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
                 "visibility_at_screen_level": ["mean", "std"]
                 "distance_to_water": ["static"],
                 }
-            n_estimators (int):
-                Number of trees in the forest.
-            max_depth (int):
-                Maximum depth of the tree.
-            max_samples (float):
-                If an int, then it is the number of samples to draw to train
-                each tree. If a float, then it is the fraction of samples to draw
-                to train each tree. If None, then each tree contains the same
-                total number of samples as originally provided.
-            random_state (int):
-                Random seed for reproducibility.
+            method (str):
+                Name of the decision tree method to use. Supported values are
+                ``"qrf"`` (via the ``quantile_forest`` package),
+                ``"lightgbm"`` (gradient-boosted trees via the ``lightgbm``
+                package), and ``"xgboost"`` (gradient-boosted trees via the
+                ``xgboost`` package).
             transformation (str):
                 Transformation to be applied to the data before fitting.
             pre_transform_addition (float):
                 Value to be added before transformation.
             unique_site_id_keys: The names of the coordinates that uniquely identify
                 each site, e.g. "wmo_id" or ["latitude", "longitude"].
-            kwargs:
-                Additional keyword arguments for the quantile regression model.
+            valid_forecast_proportion: The maximum fraction of forecast rows that
+                may be dropped due to NaNs. Exceeding this fraction raises a
+                ValueError.
+            model_kwargs:
+                Keyword arguments forwarded to the model constructor selected by
+                ``method``. For ``"qrf"`` these correspond to
+                ``RandomForestQuantileRegressor`` parameters (e.g.
+                ``n_estimators``, ``max_depth``, ``random_state``). For
+                ``"lightgbm"`` these correspond to ``lgb.LGBMRegressor``
+                parameters (e.g. ``objective``, ``alpha``, ``n_estimators``).
+                For ``"xgboost"`` these correspond to ``xgb.XGBRegressor``
+                parameters (e.g. ``objective``, ``quantile_alpha``,
+                ``n_estimators``).
         """
 
         self.target_name = target_name
         self.feature_config = feature_config
-        self.n_estimators = n_estimators
-        self.max_depth = max_depth
-        self.max_samples = max_samples
-        self.random_state = random_state
+        self.method = method
         self.transformation = transformation
         _check_valid_transformation(self.transformation)
         self.pre_transform_addition = pre_transform_addition
         if isinstance(unique_site_id_keys, str):
             unique_site_id_keys = [unique_site_id_keys]
         self.unique_site_id_keys = unique_site_id_keys
-        self.kwargs = kwargs
+        self.model_kwargs = model_kwargs
         self.expected_coordinate_order = ["forecast_reference_time", "forecast_period"]
-        # Proportion of forecast data that can be removed when dropping NaNs.
-        # Exceeding this proportion will raise a ValueError.
-        self.valid_forecast_proportion = 0.5
+        self.valid_forecast_proportion = valid_forecast_proportion
 
-    def fit_qrf(
-        self, forecast_features: np.ndarray, target: np.ndarray
-    ) -> RandomForestQuantileRegressor:
-        """Fit the quantile regression random forest model.
+    def fit_model(self, forecast_features: np.ndarray, target: np.ndarray) -> Any:
+        """Construct and fit the decision tree model selected by ``self.method``.
+
         Args:
             forecast_features (numpy.ndarray):
                 Array of forecast features.
             target (numpy.ndarray):
                 Array of target values.
         Returns:
-            qrf_model (RandomForestQuantileRegressor):
-                Fitted quantile regression model.
+            Fitted model instance.
+        Raises:
+            ValueError: If ``self.method`` is not a supported method name.
         """
-        qrf_model = RandomForestQuantileRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            max_samples=self.max_samples,
-            random_state=self.random_state,
-            **self.kwargs,
-        )
-        qrf_model.fit(forecast_features, target)
-        return qrf_model
+        if self.method == "qrf":
+            model = RandomForestQuantileRegressor(**self.model_kwargs)
+        elif self.method == "lightgbm":
+            try:
+                import lightgbm as lgb
+            except ModuleNotFoundError:
+                raise ModuleNotFoundError(
+                    "The lightgbm package is required to use method='lightgbm'. "
+                    "Install it with: pip install lightgbm"
+                )
+            model = lgb.LGBMRegressor(**self.model_kwargs)
+        elif self.method == "xgboost":
+            try:
+                import xgboost as xgb
+            except ModuleNotFoundError:
+                raise ModuleNotFoundError(
+                    "The xgboost package is required to use method='xgboost'. "
+                    "Install it with: pip install xgboost"
+                )
+            model = xgb.XGBRegressor(**self.model_kwargs)
+        else:
+            raise ValueError(
+                f"Unsupported decision tree method '{self.method}'. "
+                "Supported methods are: 'qrf', 'lightgbm', 'xgboost'."
+            )
+        model.fit(forecast_features, target)
+        return model
 
     def process(
         self,
         forecast_df: pd.DataFrame,
         truth_df: pd.DataFrame,
-    ) -> RandomForestQuantileRegressor:
-        """Train a quantile regression random forests model.
+    ) -> Any:
+        """Train the decision tree model specified by ``self.method``.
 
         Args:
             forecast_df:
@@ -530,18 +565,19 @@ class TrainQuantileRegressionRandomForests(BasePlugin):
         feature_values = np.array(combined_df[feature_column_names])
         target_values = combined_df["ob_value"].values
 
-        # Fit the quantile regression model
-        return self.fit_qrf(feature_values, target_values)
+        # Fit the decision tree model
+        return self.fit_model(feature_values, target_values)
 
 
-class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
-    """Plugin to apply a trained model using quantile regression random forests."""
+class ApplyDecisionTreeModel(PostProcessingPlugin):
+    """Plugin to apply a trained decision tree model (e.g. QRF, LightGBM, XGBoost)."""
 
     def __init__(
         self,
         target_name: str,
         feature_config: dict[str, list[str]],
         quantiles: list[np.float32],
+        method: str = "qrf",
         transformation: str = None,
         pre_transform_addition: np.float32 = 0,
         unique_site_id_keys: list[str] = ["wmo_id"],
@@ -569,6 +605,13 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
                 }
             quantiles (float):
                 Quantiles used for prediction (values ranging from 0 to 1).
+                For ``"qrf"`` this is used directly in the predict call. For
+                ``"lightgbm"`` and ``"xgboost"`` the model already encodes the
+                quantile from training, so ``quantiles`` is used only for output
+                labelling by the caller.
+            method (str):
+                Name of the decision tree method that was used to train the model.
+                Supported values are ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``.
             transformation (str):
                 Transformation to be applied to the data before fitting.
             pre_transform_addition (float):
@@ -580,13 +623,14 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
         self.target_name = target_name
         self.feature_config = feature_config
         self.quantiles = quantiles
+        self.method = method
         self.transformation = transformation
         _check_valid_transformation(self.transformation)
         self.pre_transform_addition = pre_transform_addition
         self.unique_site_id_keys = unique_site_id_keys
 
     def _reverse_transformation(self, forecast: np.ndarray) -> np.ndarray:
-        """Reverse the transformation applied to the data prior to fitting the QRF.
+        """Reverse the transformation applied to the data prior to fitting the model.
 
         Args:
             forecast: Calibrated forecast.
@@ -606,13 +650,13 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
 
     def process(
         self,
-        qrf_model: RandomForestQuantileRegressor,
+        model: Any,
         forecast_df: pd.DataFrame,
     ) -> np.ndarray:
-        """Apply a quantile regression random forests model.
+        """Apply a trained decision tree model.
 
         Args:
-            qrf_model: A trained QRF model.
+            model: A trained decision tree model (QRF, LightGBM or XGBoost).
             forecast_df: DataFrame containing the forecast information and features.
 
         Returns:
@@ -647,9 +691,23 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
         forecast_df = sanitise_forecast_dataframe(forecast_df, self.feature_config)
 
         feature_values = np.array(forecast_df[feature_column_names])
-        calibrated_forecast = qrf_model.predict(
-            feature_values, quantiles=self.quantiles
-        )
+        if self.method == "qrf":
+            calibrated_forecast = model.predict(
+                feature_values, quantiles=self.quantiles
+            )
+        elif self.method in ("lightgbm", "xgboost"):
+            calibrated_forecast = model.predict(feature_values)
+            # Gradient-boosted quantile models are trained independently per
+            # quantile level and are not guaranteed to produce monotonically
+            # ordered outputs across quantiles (quantile crossing). Sort along
+            # the quantile axis to enforce non-decreasing order.
+            if calibrated_forecast.ndim > 1:
+                calibrated_forecast = np.sort(calibrated_forecast, axis=1)
+        else:
+            raise ValueError(
+                f"Unsupported decision tree method '{self.method}'. "
+                "Supported methods are: 'qrf', 'lightgbm', 'xgboost'."
+            )
         calibrated_forecast = self._reverse_transformation(calibrated_forecast)
         calibrated_forecast = np.float32(calibrated_forecast)
 

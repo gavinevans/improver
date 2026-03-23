@@ -2,7 +2,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Unit tests for the PrepareAndApplyQRF plugin."""
+"""Unit tests for the PrepareAndApplyDecisionTree plugin."""
 
 import numpy as np
 import pandas as pd
@@ -10,13 +10,13 @@ import pytest
 from iris.coords import AuxCoord
 from iris.cube import Cube, CubeList
 
-from improver.calibration.load_and_apply_quantile_regression_random_forest import (
-    PrepareAndApplyQRF,
+from improver.calibration.load_and_apply_decision_tree import (
+    PrepareAndApplyDecisionTree,
 )
 from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     RebadgeRealizationsAsPercentiles,
 )
-from improver_tests.calibration.quantile_regression_random_forests_calibration.test_quantile_regression_random_forest import (
+from improver_tests.calibration.decision_tree_calibration.test_decision_tree import (
     _create_ancil_file,
     _create_forecasts,
     _run_train_qrf,
@@ -91,7 +91,7 @@ def set_up_for_unexpected():
     ancil_cube = _create_ancil_file(return_cube=True)
     cube_inputs.append(ancil_cube)
 
-    plugin = PrepareAndApplyQRF(
+    plugin = PrepareAndApplyDecisionTree(
         feature_config,
         "wind_speed_at_10m",
     )
@@ -267,7 +267,7 @@ def test_prepare_and_apply_qrf(
     quantiles,
     expected
 ):
-    """Test the PrepareAndApplyQRF plugin."""
+    """Test the PrepareAndApplyDecisionTree plugin."""
     feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
 
     if include_dynamic:
@@ -292,14 +292,14 @@ def test_prepare_and_apply_qrf(
         # mean is therefore NaN and an exception being raised.
         with pytest.raises(
             ValueError, match="All computed values for feature"):
-            PrepareAndApplyQRF(
+            PrepareAndApplyDecisionTree(
                 feature_config,
                 "wind_speed_at_10m",
                 unique_site_id_keys=site_id,
             )(cube_inputs, (qrf_model, transformation, pre_transform_addition))
         return
 
-    result = PrepareAndApplyQRF(
+    result = PrepareAndApplyDecisionTree(
         feature_config,
         "wind_speed_at_10m",
         unique_site_id_keys=site_id,
@@ -352,7 +352,7 @@ def test_mismatching_temporal_coordinates(
     add_fp_bounds,
     expected
 ):
-    """Test the PrepareAndApplyQRF plugin where the temporal coordinates i.e.
+    """Test the PrepareAndApplyDecisionTree plugin where the temporal coordinates i.e.
     forecast_period or forecast_reference_time do not match between the different
     features. In these tests, if a dynamic feature is present, the
     cycletime of this feature will be different to that of the target feature.
@@ -390,7 +390,7 @@ def test_mismatching_temporal_coordinates(
         fp_point = cube_inputs[0].coord("forecast_period").points[0]
         cube_inputs[0].coord("forecast_period").bounds = [[fp_point - 3600, fp_point]]
 
-    result = PrepareAndApplyQRF(
+    result = PrepareAndApplyDecisionTree(
         feature_config,
         "wind_speed_at_10m",
         unique_site_id_keys=site_id,
@@ -413,7 +413,7 @@ def test_mismatching_temporal_coordinates(
 
 
 def test_no_model_output(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when no model is provided."""
+    """Test PrepareAndApplyDecisionTree plugin behaviour when no model is provided."""
     (
         qrf_model,
         transformation,
@@ -424,8 +424,8 @@ def test_no_model_output(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    with pytest.warns(UserWarning, match="Unable to apply Quantile Regression Random Forest model."):
-        result = plugin(cube_inputs, qrf_descriptors=None)
+    with pytest.warns(UserWarning, match="Unable to apply the decision tree model."):
+        result = plugin(cube_inputs, model_descriptors=None)
     assert isinstance(result, Cube)
     assert result.name() == "wind_speed_at_10m"
     assert result.units == "m s-1"
@@ -434,7 +434,7 @@ def test_no_model_output(set_up_for_unexpected):
 
 
 def test_no_features(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when no features are provided."""
+    """Test PrepareAndApplyDecisionTree plugin behaviour when no features are provided."""
     (
         qrf_model,
         transformation,
@@ -445,12 +445,12 @@ def test_no_features(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     with pytest.raises(ValueError, match="No target forecast provided."):
-        plugin(CubeList(), qrf_descriptors=qrf_descriptors)
+        plugin(CubeList(), model_descriptors=model_descriptors)
 
 def test_missing_target_feature(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when the target feature is missing."""
+    """Test PrepareAndApplyDecisionTree plugin behaviour when the target feature is missing."""
     (
         qrf_model,
         transformation,
@@ -461,15 +461,15 @@ def test_missing_target_feature(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     with pytest.raises(ValueError, match="No target forecast provided."):
         plugin(
             CubeList([ancil_cube]),
-            qrf_descriptors=qrf_descriptors,
+            model_descriptors=model_descriptors,
         )
 
 def test_missing_static_feature(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when a static feature is missing."""
+    """Test PrepareAndApplyDecisionTree plugin behaviour when a static feature is missing."""
     (
         qrf_model,
         transformation,
@@ -480,18 +480,18 @@ def test_missing_static_feature(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     feature_config = {
         "wind_speed_at_10m": ["mean", "std"],
         "distance_to_water": ["static"],
     }
     plugin.feature_config = feature_config
     with pytest.raises(ValueError, match="The number of cubes loaded."):
-        plugin(CubeList([forecast_cube]), qrf_descriptors=qrf_descriptors)
+        plugin(CubeList([forecast_cube]), model_descriptors=model_descriptors)
 
 
 def test_unused_static_feature(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when a static feature is unused.
+    """Test PrepareAndApplyDecisionTree plugin behaviour when a static feature is unused.
     This test is to show that the plugin will ignore features that are provided
     but not specified in the feature_config."""
     (
@@ -504,12 +504,12 @@ def test_unused_static_feature(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     feature_config = {
         "wind_speed_at_10m": ["mean", "std", "latitude", "longitude"],
     }
     plugin.feature_config = feature_config
-    result = plugin(CubeList([forecast_cube, ancil_cube]), qrf_descriptors=qrf_descriptors)
+    result = plugin(CubeList([forecast_cube, ancil_cube]), model_descriptors=model_descriptors)
     assert isinstance(result, Cube)
     assert result.name() == "wind_speed_at_10m"
     assert result.units == "m s-1"
@@ -517,7 +517,7 @@ def test_unused_static_feature(set_up_for_unexpected):
 
 
 def test_missing_dynamic_feature(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when a dynamic feature is missing."""
+    """Test PrepareAndApplyDecisionTree plugin behaviour when a dynamic feature is missing."""
     (
         qrf_model,
         transformation,
@@ -528,18 +528,18 @@ def test_missing_dynamic_feature(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     feature_config = {
         "wind_speed_at_10m": ["mean", "std"],
         "air_temperature": ["mean", "std"],
     }
     plugin.feature_config = feature_config
     with pytest.raises(ValueError, match="The number of cubes loaded."):
-        plugin(CubeList([forecast_cube]), qrf_descriptors=qrf_descriptors)
+        plugin(CubeList([forecast_cube]), model_descriptors=model_descriptors)
 
 
 def test_nonmatching_representation(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when the input cubes contain a mix
+    """Test PrepareAndApplyDecisionTree plugin behaviour when the input cubes contain a mix
     of realization and percentile coordinates."""
     (
         qrf_model,
@@ -551,7 +551,7 @@ def test_nonmatching_representation(set_up_for_unexpected):
         plugin,
     ) = set_up_for_unexpected
 
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
+    model_descriptors = (qrf_model, transformation, pre_transform_addition)
     feature_config = {
         "wind_speed_at_10m": ["mean", "std", "latitude", "longitude"],
         "air_temperature": ["mean", "std"],
@@ -569,27 +569,4 @@ def test_nonmatching_representation(set_up_for_unexpected):
     )
     dynamic_cube = RebadgeRealizationsAsPercentiles()(dynamic_cube)
     with pytest.raises(ValueError, match="The input cubes contain a mix of realization"):
-        plugin(CubeList([forecast_cube, dynamic_cube, ancil_cube]), qrf_descriptors=qrf_descriptors)
-
-
-def test_no_quantile_forest_package(set_up_for_unexpected):
-    """Test PrepareAndApplyQRF plugin behaviour when the quantile_forest package is not installed."""
-    (
-        qrf_model,
-        transformation,
-        pre_transform_addition,
-        cube_inputs,
-        forecast_cube,
-        ancil_cube,
-        plugin,
-    ) = set_up_for_unexpected
-
-    qrf_descriptors = (qrf_model, transformation, pre_transform_addition)
-    plugin.quantile_forest_installed = False
-    with pytest.warns(UserWarning, match="Unable to apply Quantile Regression Random Forest model."):
-        result = plugin(CubeList([forecast_cube]), qrf_descriptors=qrf_descriptors)
-    assert isinstance(result, Cube)
-    assert result.name() == "wind_speed_at_10m"
-    assert result.units == "m s-1"
-    assert result.data.shape == forecast_cube.data.shape
-    assert np.allclose(result.data, forecast_cube.data)
+        plugin(CubeList([forecast_cube, dynamic_cube, ancil_cube]), model_descriptors=model_descriptors)

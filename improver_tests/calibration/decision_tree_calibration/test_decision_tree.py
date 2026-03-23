@@ -16,15 +16,17 @@ from iris.cube import Cube
 from iris.pandas import as_data_frame
 from pandas.testing import assert_frame_equal
 
-from improver.calibration.quantile_regression_random_forest import (
-    ApplyQuantileRegressionRandomForests,
-    TrainQuantileRegressionRandomForests,
+from improver.calibration.decision_tree import (
+    ApplyDecisionTreeModel,
+    TrainDecisionTreeModel,
     _check_valid_transformation,
     apply_transformation,
+    lightgbm_package_available,
     prep_feature,
     prep_features_from_config,
     quantile_forest_package_available,
     sanitise_forecast_dataframe,
+    xgboost_package_available,
 )
 from improver.metadata.constants.time_types import DT_FORMAT
 from improver.synthetic_data.set_up_test_cubes import set_up_spot_variable_cube
@@ -164,6 +166,7 @@ def _run_train_qrf(
     pre_transform_addition,
     extra_kwargs,
     include_static,
+    method="qrf",
     forecast_reference_times=[
         "20170101T0000Z",
         "20170101T0000Z",
@@ -214,9 +217,10 @@ def _run_train_qrf(
             forecast_df["wind_speed_at_10m"] + 10, dtype=np.float32
         )
 
-    plugin = TrainQuantileRegressionRandomForests(
+    plugin = TrainDecisionTreeModel(
         target_name="wind_speed_at_10m",
         feature_config=feature_config,
+        method=method,
         n_estimators=n_estimators,
         max_depth=max_depth,
         random_state=random_state,
@@ -664,7 +668,7 @@ def test_train_qrf_single_lead_times(
     include_static,
     expected,
 ):
-    """Test the TrainQuantileRegressionRandomForests plugin when the forecast cube
+    """Test the TrainDecisionTreeModel plugin when the forecast cube
     for training contains a single lead time."""
 
     feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
@@ -727,7 +731,7 @@ def test_train_qrf_multiple_lead_times(
     include_static,
     expected,
 ):
-    """Test the TrainQuantileRegressionRandomForests plugin when multiple lead times
+    """Test the TrainDecisionTreeModel plugin when multiple lead times
     are provided in the forecast cube for training."""
 
     feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
@@ -798,7 +802,7 @@ def test_alternative_feature_configs(
     site_id,
     expected,
 ):
-    """Test the TrainQuantileRegressionRandomForests plugin for a few different
+    """Test the TrainDecisionTreeModel plugin for a few different
     configurations of the feature_config dictionary."""
     n_estimators = 2
     max_depth = 5
@@ -850,7 +854,7 @@ def test_alternative_feature_configs(
 
 
 def test_train_qrf_many_nans():
-    """Test the TrainQuantileRegressionRandomForests plugin when the forecast cube
+    """Test the TrainDecisionTreeModel plugin when the forecast cube
     for training contains more than 50% undefined data. This raises an exception
     as such a large volume of missing forecast data suggests an issue."""
 
@@ -918,7 +922,7 @@ def test_apply_qrf(
     include_static,
     expected,
 ):
-    """Test the ApplyQuantileRegressionRandomForests plugin."""
+    """Test the ApplyDecisionTreeModel plugin."""
     if len(quantiles) == 1:
         feature_config = {"wind_speed_at_10m": ["mean", "latitude", "longitude"]}
     else:
@@ -952,12 +956,12 @@ def test_apply_qrf(
             ancil_df[["wmo_id", "distance_to_water"]], on=["wmo_id"], how="left"
         )
 
-    plugin = ApplyQuantileRegressionRandomForests(
+    plugin = ApplyDecisionTreeModel(
         "wind_speed_at_10m",
         feature_config,
         quantiles,
-        transformation,
-        pre_transform_addition,
+        transformation=transformation,
+        pre_transform_addition=pre_transform_addition,
     )
     result = plugin.process(qrf_model, forecast_df)
 
@@ -985,7 +989,7 @@ def test_apply_qrf_alternative_configs(
     feature,
     expected,
 ):
-    """Test the ApplyQuantileRegressionRandomForests plugin using alternative
+    """Test the ApplyDecisionTreeModel plugin using alternative
     configurations. For the members_below and members_above features, as
     one realization is provided for this test, this effectively adds a feature
     that is either zero of one to the feature set."""
@@ -1020,12 +1024,12 @@ def test_apply_qrf_alternative_configs(
     forecast_df = _create_forecasts(frt, vt, data)
     forecast_df = _add_day_of_training_period(forecast_df)
 
-    plugin = ApplyQuantileRegressionRandomForests(
+    plugin = ApplyDecisionTreeModel(
         "wind_speed_at_10m",
         feature_config,
         quantiles,
-        transformation,
-        pre_transform_addition,
+        transformation=transformation,
+        pre_transform_addition=pre_transform_addition,
     )
     result = plugin.process(qrf_model, forecast_df)
 
@@ -1033,3 +1037,123 @@ def test_apply_qrf_alternative_configs(
     assert result.shape == (2,)
     assert result.dtype == np.float32
     np.testing.assert_almost_equal(result, expected, decimal=2)
+
+
+def test_lightgbm_package_available():
+    """Test the lightgbm_package_available function."""
+    result = lightgbm_package_available()
+    try:
+        import lightgbm  # noqa F401
+
+        expected = True
+    except ModuleNotFoundError:
+        expected = False
+    assert result == expected
+
+
+def test_xgboost_package_available():
+    """Test the xgboost_package_available function."""
+    result = xgboost_package_available()
+    try:
+        import xgboost  # noqa F401
+
+        expected = True
+    except ModuleNotFoundError:
+        expected = False
+    assert result == expected
+
+
+def test_train_decision_tree_lightgbm():
+    """Test TrainDecisionTreeModel using the lightgbm method."""
+    lgb = pytest.importorskip("lightgbm")
+
+    feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
+    model = _run_train_qrf(
+        feature_config,
+        n_estimators=10,
+        max_depth=3,
+        random_state=42,
+        transformation=None,
+        pre_transform_addition=0,
+        extra_kwargs={"objective": "quantile", "alpha": 0.5},
+        include_static=False,
+        method="lightgbm",
+    )
+
+    assert isinstance(model, lgb.LGBMRegressor)
+    result = model.predict(np.expand_dims(np.array([7.5, 3.0, 55.0, 5.0]), 0))
+    assert isinstance(result, np.ndarray)
+
+
+def test_train_decision_tree_xgboost():
+    """Test TrainDecisionTreeModel using the xgboost method."""
+    xgb = pytest.importorskip("xgboost")
+
+    feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
+    model = _run_train_qrf(
+        feature_config,
+        n_estimators=10,
+        max_depth=3,
+        random_state=42,
+        transformation=None,
+        pre_transform_addition=0,
+        extra_kwargs={"objective": "reg:quantileerror", "quantile_alpha": 0.5},
+        include_static=False,
+        method="xgboost",
+    )
+
+    assert isinstance(model, xgb.XGBRegressor)
+    result = model.predict(np.expand_dims(np.array([7.5, 3.0, 55.0, 5.0]), 0))
+    assert isinstance(result, np.ndarray)
+
+
+def test_train_decision_tree_unsupported_method():
+    """Test that an unsupported method raises a ValueError."""
+    feature_config = {"wind_speed_at_10m": ["mean"]}
+    with pytest.raises(ValueError, match="Unsupported decision tree method 'catboost'"):
+        _run_train_qrf(
+            feature_config,
+            n_estimators=2,
+            max_depth=2,
+            random_state=42,
+            transformation=None,
+            pre_transform_addition=0,
+            extra_kwargs={},
+            include_static=False,
+            method="catboost",
+        )
+
+
+def test_apply_decision_tree_quantile_sorting_lightgbm():
+    """Test that ApplyDecisionTreeModel sorts predictions across quantiles for
+    lightgbm, guarding against quantile crossing when multiple quantile-level
+    models produce out-of-order outputs."""
+    lgb = pytest.importorskip("lightgbm")
+
+    feature_config = {"wind_speed_at_10m": ["mean", "std", "latitude", "longitude"]}
+    quantiles = [0.1, 0.5, 0.9]
+
+    # Deliberately construct an out-of-order prediction by monkeypatching predict.
+    # This simulates quantile crossing without requiring training.
+    crossed_predictions = np.array([[9.0, 4.0, 7.0], [3.0, 8.0, 5.0]])
+
+    model = lgb.LGBMRegressor()
+    model.predict = lambda x: crossed_predictions
+
+    frt = "20170103T0000Z"
+    vt = "20170103T1200Z"
+    data = np.arange(6, 19, 6)
+    forecast_df = _create_forecasts(frt, vt, data)
+    forecast_df = _add_day_of_training_period(forecast_df)
+
+    plugin = ApplyDecisionTreeModel(
+        "wind_speed_at_10m",
+        feature_config,
+        quantiles,
+        method="lightgbm",
+    )
+    result = plugin.process(model, forecast_df)
+
+    assert result.shape == (2, 3)
+    # Verify predictions are sorted (non-decreasing) across quantiles for each site.
+    assert np.all(result[:, 1:] >= result[:, :-1])
