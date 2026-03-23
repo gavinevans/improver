@@ -18,17 +18,16 @@ run_cli = acc.run_cli(CLI)
     ["without_transformation", "with_transformation"],
 )
 def test_basic(tmp_path, transformation):
-    """Test apply-quantile-regression-random-forest CLI with and without a
-    transformation applied."""
-    kgo_dir = acc.kgo_root() / "apply-quantile-regression-random-forest/"
+    """Test apply-decision-tree CLI with and without a transformation applied."""
+    kgo_dir = acc.kgo_root() / CLI
     kgo_path = kgo_dir / f"{transformation}_kgo.nc"
-    qrf_path = kgo_dir / f"{transformation}_input.pickle"
+    model_path = kgo_dir / f"{transformation}_input.pickle"
     forecast_path = kgo_dir / "input_forecast.nc"
     config_path = kgo_dir / "config.json"
     output_path = tmp_path / "output.nc"
     args = [
         forecast_path,
-        qrf_path,
+        model_path,
         "--feature-config",
         config_path,
         "--target-cf-name",
@@ -41,10 +40,10 @@ def test_basic(tmp_path, transformation):
     acc.compare(output_path, kgo_path, atol=LOOSE_TOLERANCE)
 
 
-def test_missing_qrf_model(tmp_path):
-    """Test that if no QRF model is provided, the result matches the input forecast
+def test_missing_model(tmp_path):
+    """Test that if no model is provided, the result matches the input forecast
     with the exception of the comment attribute."""
-    kgo_dir = acc.kgo_root() / "apply-quantile-regression-random-forest/"
+    kgo_dir = acc.kgo_root() / CLI
     kgo_path = kgo_dir / "added_comment_kgo.nc"
     forecast_path = kgo_dir / "input_forecast.nc"
     config_path = kgo_dir / "config.json"
