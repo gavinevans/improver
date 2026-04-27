@@ -91,7 +91,9 @@ def process(
             Can be provided as a JSON file path or a JSON string. Common
             options for KMedoids include:
 
-            - random_state (int): Random seed for reproducibility
+            - random_state (int): Random seed for reproducibility. When provided
+              with n_clusters greater than the number of samples, allows the
+              clustering algorithm to sample medoid candidates with replacement.
             - max_iter (int): Maximum number of iterations
 
             Example::

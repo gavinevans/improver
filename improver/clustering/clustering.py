@@ -6,9 +6,55 @@
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from improver import BasePlugin
+
+
+class _RandomStateWithReplacement:
+    """Wrapper around numpy RandomState that forces replace=True in choice method.
+
+    This wrapper is needed to work around kmedoids library calling
+    random_state.choice() with replace=False hardcoded. When kmedoids needs
+    to select more initial medoids than samples exist, this wrapper allows
+    sampling with replacement so the operation succeeds.
+    """
+
+    def __init__(self, random_state: int | np.random.RandomState | None = None):
+        """Initialise the wrapper with a RandomState.
+
+        Args:
+            random_state: Seed (int), numpy RandomState object, or None.
+        """
+        if isinstance(random_state, np.random.RandomState):
+            self._random_state = random_state
+        else:
+            # Create a new RandomState from seed (int or None)
+            self._random_state = np.random.RandomState(random_state)
+
+    def choice(self, a: int, size: int, replace: bool = False, p=None):
+        """Override choice to force replace=True when needed.
+
+        Args:
+            a: Population size or array to choose from.
+            size: Number of samples to draw.
+            replace: Requested replacement setting (ignored, always set to True
+                if size > a when a is an integer).
+            p: Probabilities for each element.
+
+        Returns:
+            Samples drawn with replacement if needed (size > a).
+        """
+        # If size > population and a is an integer (not an array),
+        # force replace=True to allow sampling more items than population
+        if isinstance(a, int) and size > a:
+            return self._random_state.choice(a, size=size, replace=True, p=p)
+        return self._random_state.choice(a, size=size, replace=replace, p=p)
+
+    def __getattr__(self, name):
+        """Delegate all other method calls to the underlying RandomState."""
+        return getattr(self._random_state, name)
 
 
 class FitClustering(BasePlugin):
@@ -71,6 +117,12 @@ class FitClustering(BasePlugin):
             kwargs = self.kwargs.copy()
             if "metric" not in kwargs:
                 kwargs["metric"] = "euclidean"
+
+            # Wrap random_state to force replace=True in choice method if provided
+            if "random_state" in kwargs:
+                kwargs["random_state"] = _RandomStateWithReplacement(
+                    kwargs["random_state"]
+                )
 
             clustering_class = getattr(kmedoids, self.clustering_method)
             # Convert DataFrame to numpy array for kmedoids
