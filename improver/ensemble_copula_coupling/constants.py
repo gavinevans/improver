@@ -42,6 +42,7 @@ BOUNDS_FOR_ECDF = {
     # Precipitation amount
     "lwe_thickness_of_freezing_rainfall_amount": Bounds((0, 0.5), "m"),
     "lwe_thickness_of_graupel_and_hail_fall_amount": Bounds((0, 0.5), "m"),
+    "thickness_of_lwe_precipitation_amount": Bounds((0, 0.5), "m"),
     "lwe_thickness_of_precipitation_amount": Bounds((0, 0.5), "m"),
     "lwe_thickness_of_precipitation_amount_in_vicinity": Bounds((0, 0.5), "m"),
     "lwe_thickness_of_precipitation_amount_in_variable_vicinity": Bounds((0, 0.5), "m"),
