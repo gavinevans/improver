@@ -1882,9 +1882,7 @@ class ForecastTrajectoryGapFiller(BasePlugin):
         regen_target_periods = {t[1] for t in regen_tasks}
         gap_tasks = [t for t in gap_tasks if t[1] not in regen_target_periods]
         interpolation_tasks = gap_tasks + regen_tasks
-        import pdb
 
-        pdb.set_trace()
         # Create TemporalInterpolation plugin
         interpolator = TemporalInterpolation(
             times=[],  # Set for each batch below
@@ -1930,9 +1928,6 @@ class ForecastTrajectoryGapFiller(BasePlugin):
         final_cubelist = self._assemble_final_cubelist(
             sorted_cubelist, result_cubes, periods_to_exclude
         )
-        import pdb
-
-        pdb.set_trace()
         # Merge cubes into a single cube with time as a coordinate
         return MergeCubes()(final_cubelist)
 
