@@ -127,6 +127,67 @@ def process(
     if record_run_attr is not None and model_id_attr is None:
         raise RuntimeError("model_id_attr must be specified for blend model recording")
 
+    import iris
+    import numpy as np
+
+    # new_cubes = iris.cube.CubeList()
+    # for cube in cubes:
+    # if "monc__analysis_version" in cube.attributes.keys():
+    # if np.isnan(cube.data).any():
+    #     cube.data = np.ma.masked_invalid(cube.data)
+    # for axis in "yx":
+    #     cube.coord(axis=axis).points = cube.coord(axis=axis).points.astype(
+    #         FLOAT_DTYPE
+    #     )
+    #     cube.coord(axis=axis).guess_bounds()
+    # cube.coord("forecast_period").points = cube.coord(
+    #     "forecast_period"
+    # ).points.astype(np.int32)
+    # cube.coord("realization").points = cube.coord("realization").points.astype(
+    #     np.int32
+    # )
+    # cube.coord("realization").long_name = None
+    # cube.coord("realization").var_name = "realization"
+    # cube.attributes["mosg__model_configuration"] = "nc_ens"
+    # new_cubes.append(cube)
+
+    nowcast_count = [
+        c for c in cubes if c.attributes.get("mosg__model_configuration") == "nc_ens"
+    ]
+
+    if len(cubes) == 2 and len(nowcast_count) == 1:
+        nowcast_cube = [
+            c
+            for c in cubes
+            if c.attributes.get("mosg__model_configuration") == "nc_ens"
+        ][0]
+        deterministic_cube = [
+            c
+            for c in cubes
+            if c.attributes.get("mosg__model_configuration") != "nc_ens"
+        ][0]
+
+        # Replicate deterministic cube for each realization in the nowcast
+        realization_cubes = iris.cube.CubeList()
+        for i in range(nowcast_cube.shape[0]):
+            cube_copy = deterministic_cube.copy()
+            cube_copy.add_aux_coord(
+                iris.coords.AuxCoord(
+                    np.int32(i), standard_name="realization", units="1"
+                )
+            )
+            realization_cubes.append(cube_copy)
+
+        # Concatenate to create a cube with realization as a dimensional coordinate
+        replicated_deterministic = realization_cubes.merge_cube()
+
+        # Combine both cubes
+        new_cubes = iris.cube.CubeList()
+        new_cubes.append(replicated_deterministic)
+        new_cubes.append(nowcast_cube)
+    else:
+        new_cubes = cubes
+
     plugin = WeightAndBlend(
         coordinate,
         weighting_method,
@@ -138,7 +199,7 @@ def process(
     )
 
     return plugin(
-        cubes,
+        new_cubes,
         cycletime=cycletime,
         model_id_attr=model_id_attr,
         record_run_attr=record_run_attr,
