@@ -1657,6 +1657,9 @@ class RealizationClusterAndMatch(BasePlugin):
             if cube.coords("forecast_reference_time"):
                 cube.coord("forecast_reference_time").attributes = {}
 
+        for cube in matched_cubes:
+            cube.coord("realization").units = "1"
+
         result_cube = MergeCubes()(
             CubeList([iris.util.squeeze(c) for c in matched_cubes])
         )
