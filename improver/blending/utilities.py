@@ -25,7 +25,6 @@ from improver.metadata.constants.attributes import (
 )
 from improver.metadata.constants.time_types import DT_FORMAT, TIME_COORDS
 from improver.metadata.forecast_times import add_blend_time
-from improver.utilities.cube_manipulation import get_coord_names
 from improver.utilities.temporal import (
     reset_forecast_reference_time_and_period,
 )
@@ -103,8 +102,8 @@ def get_coords_to_remove(cube: Cube, blend_coord: str) -> List[str]:
 
 
 def remove_blend_time(cube: Cube) -> Cube:
-    """Remove an existing blend_time coordinate if present."""
-    if "blend_time" in get_coord_names(cube):
+    """Remove an existing blend_time coordinate if one is present."""
+    if cube.coords("blend_time"):
         cube.remove_coord("blend_time")
     return cube
 
