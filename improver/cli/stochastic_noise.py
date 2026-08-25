@@ -21,6 +21,9 @@ def process(
     allow_seeded_parallel_processing: bool = False,
     wet_noise_floor: float = None,
     dry_fallback_range: str = None,
+    apply_noise_to_positive_regions: bool = False,
+    wet_noise_amplitude: float = 1.0,
+    apply_noise_to_positive_regions_by_source: str = None,
 ):
     """
     Class to apply spatially-structured stochastic noise to non-positive regions of a
@@ -43,13 +46,14 @@ def process(
     For a typical input field e.g. a precipitation field with some positive values
     for precipitation spread across the domain and some zero values, the plugin will
     add stochastic noise to the zero values using the SSFT approach, while leaving
-    the positive values unchanged. For fields that contain insufficient spatial
-    variability to derive meaningful SSFT perturbations (for example completely dry,
-    nearly dry, or otherwise near-constant fields), referred to here as degenerate
-    fields, the plugin will generate fallback stochastic noise ("dry fallback noise")
-    in linear space. This noise uses the wet_noise_floor and dry_fallback_range
-    arguments to ensure that the fallback noise is strictly non-positive and does
-    not exceed the noise added to wet regions.
+    the positive values unchanged (or adding noise if apply_noise_to_positive_regions
+    is True). For fields that contain insufficient spatial variability to derive
+    meaningful SSFT perturbations (for example completely dry, nearly dry, or otherwise
+    near-constant fields), referred to here as degenerate fields, the plugin will
+    generate fallback stochastic noise ("dry fallback noise") in linear space. This
+    noise uses the wet_noise_floor and dry_fallback_range arguments to ensure that the
+    fallback noise is strictly non-positive and does not exceed the noise added to
+    wet regions.
 
     While this plugin accepts any cube with "x" and "y" dimensions, it is
     recommended to first slice the cube over the realization dimension and
@@ -132,6 +136,27 @@ def process(
             dry_fallback_range is provided, the max_value of dry_fallback_range
             must be <= wet_noise_floor to ensure separation between dry-fallback
             and wet noise ranges.
+        apply_noise_to_positive_regions:
+            If True, stochastic noise will also be applied to positive (wet) regions
+            in addition to non-positive (dry) regions. This can be used to diversify
+            ensemble members, for example when generating recycled realizations.
+            The magnitude of noise applied to positive regions is controlled by
+            wet_noise_amplitude. Default is False (noise only to non-positive regions).
+        wet_noise_amplitude:
+            Multiplicative scaling factor for stochastic noise applied to positive
+            regions when apply_noise_to_positive_regions is True. A value of 1.0
+            applies the full SSFT-generated noise; smaller values (e.g. 0.1) apply
+            modest noise for subtle diversification. Has no effect if
+            apply_noise_to_positive_regions is False. Default is 1.0.
+        apply_noise_to_positive_regions_by_source:
+            Optional comma-separated list of forecast source names (e.g.
+            "gl_ens,ecgl_ens") for which wet-region noise should be applied.
+            When set, overrides apply_noise_to_positive_regions flag with
+            source-aware logic by querying the cube's cluster_sources attribute.
+            Noise is applied to positive regions only if the current forecast
+            period's source is in this list. Cannot be used together with
+            apply_noise_to_positive_regions=True. Default is None (use
+            apply_noise_to_positive_regions flag instead).
 
     Returns:
         Cube with added stochastic noise.
@@ -163,6 +188,9 @@ def process(
         "allow_seeded_parallel_processing": allow_seeded_parallel_processing,
         "wet_noise_floor": wet_noise_floor,
         "dry_fallback_range": parsed_dry_fallback_range,
+        "apply_noise_to_positive_regions": apply_noise_to_positive_regions,
+        "wet_noise_amplitude": wet_noise_amplitude,
+        "apply_noise_to_positive_regions_by_source": apply_noise_to_positive_regions_by_source,
     }
 
     plugin = StochasticNoise(**plugin_kwargs)
