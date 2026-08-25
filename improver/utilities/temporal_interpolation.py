@@ -1243,6 +1243,9 @@ class ForecastTrajectoryGapFiller(BasePlugin):
         if self.interpolation_window_by_source_pair_seconds:
             source_pair = frozenset(sources_before | sources_after)
             if source_pair not in self.interpolation_window_by_source_pair_seconds:
+                import pdb
+
+                pdb.set_trace()
                 available = [
                     set(p) for p in self.interpolation_window_by_source_pair_seconds
                 ]
