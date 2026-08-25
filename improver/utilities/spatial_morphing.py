@@ -483,23 +483,6 @@ class SpatialMorphing(BasePlugin):
         forecast_cubes, cluster_cube = (
             self._selection_helper.split_cubes_forecast_and_cluster(cubes)
         )
-        # Hard code for testing.
-        cluster_sources = json.loads(
-            cluster_cube.attributes.get(self.cluster_sources_attribute)
-        )
-        cluster_sources["17"]["uk_ens"] = [
-            43200,
-            86400,
-            129600,
-            172800,
-            216000,
-            259200,
-            302400,
-            345600,
-            388800,
-            432000,
-        ]
-        cluster_cube.attributes["cluster_sources"] = json.dumps(cluster_sources)
 
         # Step 2: Validate all forecast cubes have same validity time
         self._selection_helper.validate_common_validity_time(forecast_cubes)
