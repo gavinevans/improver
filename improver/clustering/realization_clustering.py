@@ -17,6 +17,7 @@ from iris.cube import Cube, CubeList
 from iris.util import new_axis, promote_aux_coord_to_dim_coord
 
 from improver import BasePlugin
+from improver.blending.utilities import remove_blend_time, remove_deprecation_warnings
 from improver.clustering.cluster_sources_utils import (
     find_nearest_forecast_period_gte,
 )
@@ -2023,22 +2024,6 @@ class RealizationSelection(BasePlugin):
             selected_cubes.append(selected)
         return selected_cubes
 
-    def _remove_blend_time_from_selected_cubes(
-        self, selected_cubes: list[Cube]
-    ) -> None:
-        """Remove blend_time coordinate from all selected cubes if present on any.
-
-        blend_time is removed to avoid ambiguity in the merged output, as selected
-        cubes may come from different source models with differing blend_time values.
-
-        Args:
-            selected_cubes:
-                Realization-selected cubes, modified in place.
-        """
-        for cube in selected_cubes:
-            if cube.coords("blend_time"):
-                cube.remove_coord("blend_time")
-
     def process(self, cubes: CubeList) -> Cube:
         """
         Select realizations from input forecast cubes according to cluster assignments
@@ -2085,10 +2070,8 @@ class RealizationSelection(BasePlugin):
         )
         # Remove blend time and sanitise forecast_reference_time attributes to
         # support merging.
-        self._remove_blend_time_from_selected_cubes(selected_cubes)
-        for cube in selected_cubes:
-            if cube.coords("forecast_reference_time"):
-                cube.coord("forecast_reference_time").attributes = {}
+        selected_cubes = [remove_blend_time(cube) for cube in selected_cubes]
+        selected_cubes = [remove_deprecation_warnings(cube) for cube in selected_cubes]
 
         result_cube = MergeCubes()(CubeList(selected_cubes))
         if "cluster_sources" in cluster_cube.attributes:

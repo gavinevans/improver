@@ -25,6 +25,7 @@ from improver.metadata.constants.attributes import (
 )
 from improver.metadata.constants.time_types import DT_FORMAT, TIME_COORDS
 from improver.metadata.forecast_times import add_blend_time
+from improver.utilities.cube_manipulation import get_coord_names
 from improver.utilities.temporal import (
     reset_forecast_reference_time_and_period,
 )
@@ -99,6 +100,23 @@ def get_coords_to_remove(cube: Cube, blend_coord: str) -> List[str]:
         if blend_dim in cube.coord_dims(coord):
             crds_to_remove.append(coord.name())
     return crds_to_remove
+
+
+def remove_blend_time(cube: Cube) -> Cube:
+    """Remove an existing blend_time coordinate if present."""
+    if "blend_time" in get_coord_names(cube):
+        cube.remove_coord("blend_time")
+    return cube
+
+
+def remove_deprecation_warnings(cube: Cube) -> Cube:
+    """Remove deprecation warnings from forecast time coordinates."""
+    for coord in ["forecast_period", "forecast_reference_time"]:
+        try:
+            cube.coord(coord).attributes.pop("deprecation_message", None)
+        except CoordinateNotFoundError:
+            pass
+    return cube
 
 
 def update_blended_metadata(
