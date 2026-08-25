@@ -24,6 +24,8 @@ from improver.blending.utilities import (
     find_blend_dim_coord,
     get_coords_to_remove,
     record_run_coord_to_attr,
+    remove_blend_time,
+    remove_deprecation_warnings,
     store_record_run_as_coord,
     update_blended_metadata,
     update_record_run_weights,
@@ -208,6 +210,32 @@ def test_get_coords_to_remove_noop(cycle_cube):
     """Test time coordinates are not removed"""
     result = get_coords_to_remove(cycle_cube, "forecast_reference_time")
     assert not result
+
+
+def test_remove_blend_time(cycle_cube):
+    """Test that blend_time is removed when present."""
+    cube = cycle_cube.copy()
+    cube.add_aux_coord(AuxCoord([1], long_name="blend_time", units="1"))
+
+    result = remove_blend_time(cube)
+
+    assert result is cube
+    assert not cube.coords("blend_time")
+
+
+def test_remove_deprecation_warnings(cycle_cube):
+    """Test deprecation warnings are removed from time coordinates."""
+    cube = cycle_cube.copy()
+    cube.coord("forecast_period").attributes["deprecation_message"] = "remove me"
+    cube.coord("forecast_reference_time").attributes["deprecation_message"] = (
+        "remove me"
+    )
+
+    result = remove_deprecation_warnings(cube)
+
+    assert result is cube
+    assert "deprecation_message" not in cube.coord("forecast_period").attributes
+    assert "deprecation_message" not in cube.coord("forecast_reference_time").attributes
 
 
 def test_get_coords_to_remove_scalar(model_cube, model_cube_with_blend_record):

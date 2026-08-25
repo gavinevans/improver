@@ -17,6 +17,7 @@ from iris.cube import Cube, CubeList
 from iris.util import new_axis, promote_aux_coord_to_dim_coord
 
 from improver import BasePlugin
+from improver.blending.utilities import remove_blend_time
 from improver.clustering.clustering import FitClustering
 from improver.regrid.landsea import RegridLandSea
 from improver.utilities.cube_manipulation import (
@@ -1925,22 +1926,6 @@ class RealizationSelection(BasePlugin):
             selected_cubes.append(selected)
         return selected_cubes
 
-    def _remove_blend_time_from_selected_cubes(
-        self, selected_cubes: list[Cube]
-    ) -> None:
-        """Remove blend_time coordinate from all selected cubes if present on any.
-
-        blend_time is removed to avoid ambiguity in the merged output, as selected
-        cubes may come from different source models with differing blend_time values.
-
-        Args:
-            selected_cubes:
-                Realization-selected cubes, modified in place.
-        """
-        for cube in selected_cubes:
-            if cube.coords("blend_time"):
-                cube.remove_coord("blend_time")
-
     def process(self, cubes: CubeList) -> Cube:
         """
         Select realizations from input forecast cubes according to cluster assignments
@@ -1987,7 +1972,7 @@ class RealizationSelection(BasePlugin):
         )
         # Remove blend time and sanitise forecast_reference_time attributes to
         # support merging.
-        self._remove_blend_time_from_selected_cubes(selected_cubes)
+        selected_cubes = [remove_blend_time(cube) for cube in selected_cubes]
         for cube in selected_cubes:
             if cube.coords("forecast_reference_time"):
                 cube.coord("forecast_reference_time").attributes = {}
