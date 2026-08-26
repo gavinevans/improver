@@ -225,6 +225,7 @@ class SpatialMorphing(BasePlugin):
         return parsed_transitions
 
     def _find_active_transition_for_source(
+        self,
         source_tag: str,
         selected_source_name,
         forecast_period,

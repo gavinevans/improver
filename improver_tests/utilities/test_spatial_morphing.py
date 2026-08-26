@@ -240,13 +240,13 @@ def test_find_active_transition_uses_selected_source_to_disambiguate_overlaps():
         },
     )
 
-    assert plugin._find_active_transition(21600, "uk_det") == {
+    assert plugin._find_active_transition(10800, "uk_det") == {
         "source_a": "nc_det uk_det",
         "source_b": "uk_det",
         "start_forecast_period_seconds": 7200,
         "end_forecast_period_seconds": 14400,
     }
-    assert plugin._find_active_transition(21600, "uk_ens") == {
+    assert plugin._find_active_transition(10800, "uk_ens") == {
         "source_a": "nc_det uk_det",
         "source_b": "uk_ens",
         "start_forecast_period_seconds": 7200,
