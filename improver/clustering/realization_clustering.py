@@ -1660,6 +1660,8 @@ class RealizationClusterAndMatch(BasePlugin):
                 cube.remove_coord("blend_time")
             if cube.coords("forecast_reference_time"):
                 cube.coord("forecast_reference_time").attributes = {}
+        for cube in matched_cubes:
+            cube.coord("realization").units = 1
 
         result_cube = MergeCubes()(
             CubeList([iris.util.squeeze(c) for c in matched_cubes])
@@ -2072,6 +2074,9 @@ class RealizationSelection(BasePlugin):
         # support merging.
         selected_cubes = [remove_blend_time(cube) for cube in selected_cubes]
         selected_cubes = [remove_deprecation_warnings(cube) for cube in selected_cubes]
+
+        for cube in selected_cubes:
+            cube.coord("realization").units = 1
 
         result_cube = MergeCubes()(CubeList(selected_cubes))
         if "cluster_sources" in cluster_cube.attributes:
