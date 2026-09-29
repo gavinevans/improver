@@ -612,23 +612,49 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
 
         """
         has_cap = max_allowed_difference is not None
-        original_forecast_bounds = None
+        original_forecast_values = None
+        representation_name = None
+        groupby_cols = [
+            "forecast_reference_time",
+            "forecast_period",
+            *self.unique_site_id_keys,
+        ]
         if has_cap:
-            groupby_cols = [
-                "forecast_reference_time",
-                "forecast_period",
-                *self.unique_site_id_keys,
-            ]
-            original_forecast_bounds = (
-                forecast_df.groupby(groupby_cols)[self.target_name]
-                .agg(["min", "max"])
-                .rename(
-                    columns={
-                        "min": "original_forecast_min",
-                        "max": "original_forecast_max",
-                    }
+            representation_name = next(
+                (
+                    name
+                    for name in ["percentile", "realization"]
+                    if name in forecast_df.columns
+                ),
+                None,
+            )
+            if representation_name is None:
+                msg = (
+                    "The forecast DataFrame must contain either a 'percentile' "
+                    "or 'realization' column when applying max_allowed_difference."
                 )
-                .reset_index()
+                raise ValueError(msg)
+            # Preserve the pre-processed forecast values so the cap can be applied
+            # relative to the original spread at each site and rank.
+            original_forecast_values = forecast_df[
+                groupby_cols + [self.target_name]
+            ].copy()
+            original_forecast_values[representation_name] = forecast_df[
+                representation_name
+            ].values
+            original_forecast_values = original_forecast_values.sort_values(
+                [*groupby_cols, representation_name]
+            )
+            # Assign an integer rank within each site after sorting by
+            # representation_name. For percentiles, rank 0 is the lowest
+            # percentile at that site; for realizations, rank 0 is the first
+            # ordered realization. This allows reshaping to a [n_sites, n_ranks]
+            # matrix and clipping each calibrated value against its matching
+            # original quantile/realization position.
+            original_forecast_values["forecast_rank"] = (
+                original_forecast_values.groupby(groupby_cols, sort=False)
+                .cumcount()
+                .astype(np.int32)
             )
 
         for variable_name in self.feature_config.keys():
@@ -654,22 +680,10 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
             pre_transform_addition=self.pre_transform_addition,
             unique_site_id_keys=self.unique_site_id_keys,
         )
-        if has_cap:
-            forecast_df = forecast_df.merge(
-                original_forecast_bounds,
-                on=[
-                    "forecast_reference_time",
-                    "forecast_period",
-                    *self.unique_site_id_keys,
-                ],
-                how="left",
-            )
 
         forecast_df = sanitise_forecast_dataframe(forecast_df, self.feature_config)
+        site_order = forecast_df[groupby_cols].drop_duplicates().reset_index(drop=True)
         feature_values = np.array(forecast_df[feature_column_names])
-        if has_cap:
-            original_forecast_min = forecast_df["original_forecast_min"].to_numpy()
-            original_forecast_max = forecast_df["original_forecast_max"].to_numpy()
         del forecast_df
 
         calibrated_forecast = qrf_model.predict(
@@ -678,19 +692,29 @@ class ApplyQuantileRegressionRandomForests(PostProcessingPlugin):
         calibrated_forecast = self._reverse_transformation(calibrated_forecast)
 
         if has_cap:
-            lower_bound = original_forecast_min - max_allowed_difference
-            upper_bound = original_forecast_max + max_allowed_difference
+            # Align all per-site arrays to the same site ordering used by the model
+            # feature rows after sanitisation.
+            site_index = pd.MultiIndex.from_frame(site_order[groupby_cols])
+            # Build a dense [n_sites, n_ranks] matrix of the original values.
+            original_values = (
+                original_forecast_values.pivot(
+                    index=groupby_cols,
+                    columns="forecast_rank",
+                    values=self.target_name,
+                )
+                .reindex(site_index)
+                .to_numpy(dtype=np.float32)
+            )
+
             if calibrated_forecast.ndim == 1:
-                calibrated_forecast = np.clip(
-                    calibrated_forecast, lower_bound, upper_bound
-                )
-            else:
-                calibrated_forecast = np.clip(
-                    calibrated_forecast,
-                    lower_bound[:, np.newaxis],
-                    upper_bound[:, np.newaxis],
-                )
-            del original_forecast_min, original_forecast_max, lower_bound, upper_bound
+                # Single output per site: collapse rank dimension.
+                original_values = original_values[:, 0]
+            # Cap each calibrated value to lie within +/- max_allowed_difference
+            # of its corresponding original value.
+            lower_bound = original_values - max_allowed_difference
+            upper_bound = original_values + max_allowed_difference
+            calibrated_forecast = np.clip(calibrated_forecast, lower_bound, upper_bound)
+            del original_forecast_values, original_values, lower_bound, upper_bound
 
         calibrated_forecast = np.float32(calibrated_forecast)
         return calibrated_forecast

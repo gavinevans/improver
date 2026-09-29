@@ -1058,16 +1058,17 @@ def test_apply_qrf_alternative_configs(
         (
             [0.1, 0.5, 0.9],
             np.array([6, 12, 18], dtype=np.float32),
-            # Quantiles are clipped independently per site to site-specific
-            # lower/upper limits; tail quantiles clip first, while central
-            # quantiles usually remain unchanged.
+            # For each site, the raw percentile values are [6, 12, 18] and [8, 14, 20]
+            # respectively. The QRF output is [30, 25, 22] and [0.5, 2, 9]. To cap
+            # the change, each calibrated percentile is clipped to lie within +/-5 of
+            # its corresponding original value, i.e. for site 1: [1, 7, 13] <= p <=
+            # [11, 17, 23] and for site 2: [3, 9, 15] <= p <= [13, 19, 25]. This
+            # preserves the original spread structure instead of collapsing all
+            # percentiles for a site into a single min/max envelope.
             np.array([[30.0, 25.0, 22.0], [0.5, 2.0, 9.0]], dtype=np.float32),
             5.0,
-            # The cap is applied relative to each site's original forecast range:
-            # 18 + 5 = 23 is the upper bound for the first site, while 8 - 5 = 3 is
-            # the lower bound for the second site. Values beyond these limits are
-            # clipped, while points already inside the allowed range remain unchanged.
-            np.array([[23.0, 23.0, 22.0], [3.0, 3.0, 9.0]], dtype=np.float32),
+            # Resulting capped values: site 1 -> [11, 17, 22] and site 2 -> [3, 9, 15].
+            np.array([[11.0, 17.0, 22.0], [3.0, 9.0, 15.0]], dtype=np.float32),
         ),
     ],
 )
@@ -1084,8 +1085,9 @@ def test_apply_qrf_caps_forecast_by_max_allowed_difference(
     rather than across all sites together. The forecast helper creates the second
     site using values of data + 2, which provides a different baseline range for
     verifying site-specific clipping limits.
-    The highest and lowest values of the QRF output are clipped to the upper and lower
-    bounds of the original forecast range plus or minus the max_allowed_difference.
+    Each forecast percentile is clipped to remain within +/- max_allowed_difference
+    of its corresponding raw percentile value, preserving the original percentile
+    spread rather than collapsing all percentiles within a site to one common box.
     """
 
     feature_config = {"wind_speed_at_10m": ["latitude", "longitude"]}
@@ -1111,3 +1113,35 @@ def test_apply_qrf_caps_forecast_by_max_allowed_difference(
     )
 
     np.testing.assert_array_equal(result, expected)
+
+
+def test_apply_qrf_caps_forecast_requires_representation_column():
+    """Test that capping requires a percentile or realization representation."""
+
+    feature_config = {"wind_speed_at_10m": ["latitude", "longitude"]}
+
+    frt = "20170103T0000Z"
+    vt = "20170103T1200Z"
+    forecast_df = _create_forecasts(
+        frt,
+        vt,
+        np.array([6, 12, 18], dtype=np.float32),
+        representation="percentile",
+    )
+    forecast_df = _add_day_of_training_period(forecast_df)
+    forecast_df = forecast_df.drop(columns=["percentile"])
+
+    plugin = ApplyQuantileRegressionRandomForests(
+        "wind_speed_at_10m",
+        feature_config,
+        [0.1, 0.5, 0.9],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "The forecast DataFrame must contain either a 'percentile' "
+            "or 'realization' column when applying max_allowed_difference."
+        ),
+    ):
+        plugin.process(Mock(), forecast_df, max_allowed_difference=5.0)
