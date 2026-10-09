@@ -2,12 +2,12 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to load inputs and train a decision tree-based model."""
+"""Script to load inputs and train a regression model."""
 
 import pathlib
 import warnings
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import iris
 import numpy as np
@@ -22,14 +22,15 @@ from improver.calibration import (
     identify_parquet_type,
     split_netcdf_parquet_pickle,
 )
-from improver.calibration.decision_tree import (
-    TrainDecisionTreeModel,
+from improver.calibration.regression_model import (
+    RegressionModelArtifact,
+    TrainRegressionModel,
     _check_valid_transformation,
 )
 
 
-class LoadForTrainDecisionTree(PostProcessingPlugin):
-    """Plugin to load input files for training a decision tree-based model."""
+class LoadForTrainRegressionModel(PostProcessingPlugin):
+    """Plugin to load input files for training a regression model."""
 
     def __init__(
         self,
@@ -42,11 +43,11 @@ class LoadForTrainDecisionTree(PostProcessingPlugin):
         experiments: list[str],
         unique_site_id_keys: Union[list[str], str] = "wmo_id",
     ):
-        """Initialise the LoadForTrainDecisionTree plugin.
+        """Initialise the LoadForTrainRegressionModel plugin.
 
         Args:
             feature_config: Feature configuration defining the features to be used for
-                the decision tree model.
+                the regression model.
             parquet_diagnostic_names: A list containing the diagnostic names that will
                 be used for filtering the forecast and truth DataFrames read in from
                 the parquet files. The target diagnostic name is expected to be the
@@ -317,7 +318,7 @@ class LoadForTrainDecisionTree(PostProcessingPlugin):
         self,
         file_paths: list[pathlib.Path | str],
     ) -> Optional[tuple[iris.cube.CubeList, pathlib.Path | str, pathlib.Path | str]]:
-        """Load input files for training a decision tree-based model.
+        """Load input files for training a regression model.
         Two sources of input data must be provided: historical forecasts and
         historical truth data (to use in calibration).
 
@@ -371,7 +372,7 @@ class LoadForTrainDecisionTree(PostProcessingPlugin):
         if forecast_df is None:
             msg = (
                 "The forecast parquet files are empty after filtering. "
-                "Unable to train the Quantile Regression Random Forest model."
+                "Unable to train the regression model."
             )
             warnings.warn(msg)
             return None, None, None
@@ -394,8 +395,8 @@ class LoadForTrainDecisionTree(PostProcessingPlugin):
         return forecast_df, truth_df, cube_inputs
 
 
-class PrepareAndTrainDecisionTree(PostProcessingPlugin):
-    """Plugin to prepare data and train a decision tree-based model."""
+class PrepareAndTrainRegressionModel(PostProcessingPlugin):
+    """Plugin to prepare data and train a regression model."""
 
     def __init__(
         self,
@@ -408,15 +409,15 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
         valid_forecast_proportion: float = 0.5,
         **model_kwargs,
     ):
-        """Initialise the PrepareAndTrainDecisionTree plugin.
+        """Initialise the PrepareAndTrainRegressionModel plugin.
 
         Args:
             feature_config: Feature configuration defining the features to be used for
-                the decision tree model.
+                the regression model.
             target_cf_name: A string containing the CF name of the forecast to be
                 calibrated e.g. air_temperature.
-            method: Name of the decision tree method to use, e.g. ``"qrf"``. This is
-                passed to :class:`TrainDecisionTreeModel`, which is
+            method: Name of the regression method to use, e.g. ``"qrf"``. This is
+                passed to :class:`TrainRegressionModel`, which is
                 responsible for constructing and fitting the appropriate model.
             transformation: Transformation to be applied to the data before fitting.
             pre_transform_addition: Value to be added before transformation.
@@ -426,7 +427,7 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
                 may be dropped due to NaNs. Exceeding this fraction raises a
                 ValueError.
             model_kwargs: Keyword arguments forwarded to the model constructor via
-                :class:`TrainDecisionTreeModel` (e.g. ``n_estimators``,
+                :class:`TrainRegressionModel` (e.g. ``n_estimators``,
                 ``max_depth``, ``random_state`` for ``"qrf"``).
         """
         self.feature_config = feature_config
@@ -552,8 +553,8 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
         forecast_df: pd.DataFrame,
         truth_df: pd.DataFrame,
         cube_inputs: Optional[iris.cube.CubeList] = None,
-    ) -> Optional[tuple[Any, Optional[str], float]]:
-        """Prepare input data and train a decision tree-based model. The model
+    ) -> Optional[RegressionModelArtifact]:
+        """Prepare input data and train a regression model. The model
         can be applied later to calibrate the forecast. Two sources of input data
         must be provided: historical forecasts and historical truth data.
         The model is output as a pickle file.
@@ -563,10 +564,9 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
             truth_df: DataFrame containing the truth data.
             cube_inputs: List of cubes containing additional features.
 
-        Returns: A tuple containing:
-            - The trained model.
-            - The transformation applied to the data before fitting.
-            - The value added before transformation.
+        Returns:
+            A versioned model artifact containing the trained model and associated
+            metadata required for application.
 
         Raises:
             ValueError: If there are no matching times between the forecast and truth
@@ -576,17 +576,17 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
         if len(intersecting_times) == 0:
             msg = (
                 "No matching times between the forecast and truth data. "
-                "Unable to train the decision tree model."
+                "Unable to train the regression model."
             )
             warnings.warn(msg)
-            return None, None, None
+            return None
 
         forecast_df = self._add_static_features_from_cubes_to_df(
             forecast_df, cube_inputs
         )
         forecast_df, truth_df = self.filter_bad_sites(forecast_df, truth_df)
 
-        trainer = TrainDecisionTreeModel(
+        trainer = TrainRegressionModel(
             target_name=self.target_cf_name,
             feature_config=self.feature_config,
             method=self.method,
@@ -597,6 +597,12 @@ class PrepareAndTrainDecisionTree(PostProcessingPlugin):
             **self.model_kwargs,
         )
         model = trainer.process(forecast_df, truth_df)
-        # Return as a tuple so that the transformation and pre_transform_addition
-        # are stored alongside the model.
-        return (model, self.transformation, self.pre_transform_addition)
+        return RegressionModelArtifact.create(
+            method=self.method,
+            model=model,
+            target_name=self.target_cf_name,
+            feature_config=self.feature_config,
+            transformation=self.transformation,
+            pre_transform_addition=self.pre_transform_addition,
+            unique_site_id_keys=self.unique_site_id_keys,
+        )

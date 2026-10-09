@@ -3,7 +3,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to load and apply a trained decision tree model."""
+"""Script to load and apply a trained regression model."""
 
 import warnings
 from typing import Any, Optional
@@ -16,8 +16,9 @@ from iris.pandas import as_data_frame
 
 from improver import PostProcessingPlugin
 from improver.calibration import add_static_feature_from_cube_to_df, add_warning_comment
-from improver.calibration.decision_tree import (
-    ApplyDecisionTreeModel,
+from improver.calibration.regression_model import (
+    ApplyRegressionModel,
+    RegressionModelArtifact,
 )
 from improver.ensemble_copula_coupling.utilities import choose_set_of_percentiles
 from improver.utilities.cube_checker import assert_spatial_coords_match
@@ -27,8 +28,8 @@ from improver.utilities.temporal import datetime_to_iris_time
 iris.FUTURE.pandas_ndim = True
 
 
-class PrepareAndApplyDecisionTree(PostProcessingPlugin):
-    """Prepare the input forecast for application of a trained decision tree model
+class PrepareAndApplyRegressionModel(PostProcessingPlugin):
+    """Prepare the input forecast for application of a trained regression model
     and apply the model."""
 
     def __init__(
@@ -66,7 +67,7 @@ class PrepareAndApplyDecisionTree(PostProcessingPlugin):
                 will be used to separate it from the rest of the dynamic predictors,
                 if present.
             method (str):
-                Name of the decision tree method that was used to train the model.
+                Name of the regression method that was used to train the model.
                 Supported values are ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``.
                 Defaults to ``"qrf"``.
             unique_site_id_keys (list):
@@ -201,7 +202,7 @@ class PrepareAndApplyDecisionTree(PostProcessingPlugin):
         """Update the forecast_reference_time and forecast_period coordinates
         on the input cubes to match those provided, if they are provided. The rebadging
         of the forecast_period introduces a slight discrepancy between the forecasts
-        used for training and application of the decision tree model. However, as any forecast
+        used for training and application of the regression model. However, as any forecast
         period rebadging is expected to be small (e.g. a few hours), this is not
         expected to be a significant issue.
 
@@ -281,29 +282,62 @@ class PrepareAndApplyDecisionTree(PostProcessingPlugin):
     def process(
         self,
         cube_inputs: CubeList,
-        model_descriptors: Optional[tuple[Any, str, float]] = None,
+        model_artifact: Optional[RegressionModelArtifact | dict[str, Any]] = None,
     ) -> Cube:
-        """Load and apply the trained decision tree model. The model is used to
+        """Load and apply the trained regression model. The model is used to
         calibrate the forecast provided. The calibrated forecast is written to a cube.
         If no model is provided the input forecast is returned unchanged.
 
         Args:
             cube_inputs: List of cubes containing the features and the forecast to be
                 calibrated.
-            model_descriptors: The trained model to be applied to the forecast
-                and the transformation and pre-transform addition applied during
-                training. The descriptors expected are a tuple of:
-                (model, transformation, pre_transform_addition).
+            model_artifact: Versioned model artifact containing the trained model
+                and metadata from training.
 
         Returns:
             iris.cube.Cube:
                 The calibrated forecast cube.
         """
-        if model_descriptors is None:
-            # If no descriptors are provided, return the input forecast with a warning.
-            # Descriptors expected: (model, transformation, pre_transform_addition)
-            model_descriptors = (None, None, 0)
-        model, transformation, pre_transform_addition = model_descriptors
+        if model_artifact is None:
+            model = None
+            transformation = None
+            pre_transform_addition = 0
+            method = self.method
+        else:
+            artifact = RegressionModelArtifact.from_payload(model_artifact)
+            if artifact.target_name != self.target_cf_name:
+                msg = (
+                    "The target name in the model artifact does not match the "
+                    "requested target name for application. "
+                    f"Artifact target: '{artifact.target_name}'. Requested target: "
+                    f"'{self.target_cf_name}'."
+                )
+                raise ValueError(msg)
+            if artifact.feature_config != self.feature_config:
+                msg = (
+                    "The feature_config in the model artifact does not match the "
+                    "requested feature_config for application."
+                )
+                raise ValueError(msg)
+            if artifact.unique_site_id_keys != self.unique_site_id_keys:
+                msg = (
+                    "The unique_site_id_keys in the model artifact do not match "
+                    "the requested unique_site_id_keys for application. "
+                    f"Artifact: {artifact.unique_site_id_keys}. Requested: "
+                    f"{self.unique_site_id_keys}."
+                )
+                raise ValueError(msg)
+            if artifact.method != self.method:
+                msg = (
+                    "The method in the model artifact does not match the "
+                    f"requested method. Artifact method: '{artifact.method}'. "
+                    f"Requested method: '{self.method}'."
+                )
+                raise ValueError(msg)
+            model = artifact.model
+            transformation = artifact.transformation
+            pre_transform_addition = artifact.pre_transform_addition
+            method = artifact.method
 
         cube_inputs, forecast_cube = self._get_inputs(cube_inputs, model=model)
 
@@ -312,7 +346,7 @@ class PrepareAndApplyDecisionTree(PostProcessingPlugin):
 
         if not model:
             msg = (
-                "Unable to apply the decision tree model. "
+                "Unable to apply the regression model. "
                 "No trained model has been provided. "
                 "Returning the input forecast without calibration."
             )
@@ -332,11 +366,11 @@ class PrepareAndApplyDecisionTree(PostProcessingPlugin):
         df = self._cube_to_dataframe(cube_inputs)
         del cube_inputs
 
-        calibrated_forecast = ApplyDecisionTreeModel(
+        calibrated_forecast = ApplyRegressionModel(
             target_name=self.target_cf_name,
             feature_config=self.feature_config,
             quantiles=quantile_list,
-            method=self.method,
+            method=method,
             transformation=transformation,
             pre_transform_addition=pre_transform_addition,
             unique_site_id_keys=self.unique_site_id_keys,

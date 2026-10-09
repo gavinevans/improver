@@ -3,7 +3,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to train a decision tree-based model for post-processing."""
+"""Script to train a regression model for post-processing."""
 
 from improver import cli
 
@@ -25,9 +25,9 @@ def process(
     pre_transform_addition: float = 0,
     unique_site_id_keys: cli.comma_separated_list = "wmo_id",
 ):
-    """Training a decision tree model for post-processing.
+    """Training a regression model for post-processing.
 
-    Loads in arguments for training a decision tree-based model which can later
+    Loads in arguments for training a regression model which can later
     be applied to calibrate the forecast. Two sources of input data must be
     provided: historical forecasts and historical truth data (to use in
     calibration). The model is output as a pickle file.
@@ -49,7 +49,7 @@ def process(
             - Optionally, paths to NetCDF files containing additional predictors.
         feature_config (dict):
             Feature configuration defining the features to be used for the
-            decision tree model. The configuration is a dictionary of strings,
+            regression model. The configuration is a dictionary of strings,
             where the keys are the names of the input cube(s) supplied, and the
             values are a list. This list can contain both computed features, such
             as the mean or standard deviation (std), or static features, such as
@@ -98,7 +98,7 @@ def process(
             This is expected to be the same length as the parquet_diagnostic_names
             and cf_names lists.
         method (str):
-            The decision tree method to use for training. Supported values are
+            The regression method to use for training. Supported values are
             ``"qrf"`` (default), ``"lightgbm"``, and ``"xgboost"``.
         model_kwargs (dict):
             A JSON dictionary of keyword arguments to pass to the model
@@ -116,16 +116,15 @@ def process(
             The names of the coordinates that uniquely identify each site,
             e.g. "wmo_id" or "latitude,longitude".
     Returns:
-        A trained decision tree model with associated transformation and
-        pre-transformation addition that will be stored as a pickle file.
+        A trained regression model artifact that will be stored as a pickle file.
     """
 
-    from improver.calibration.load_and_train_decision_tree import (
-        LoadForTrainDecisionTree,
-        PrepareAndTrainDecisionTree,
+    from improver.calibration.load_and_train_regression_model import (
+        LoadForTrainRegressionModel,
+        PrepareAndTrainRegressionModel,
     )
 
-    forecast_df, truth_df, cube_inputs = LoadForTrainDecisionTree(
+    forecast_df, truth_df, cube_inputs = LoadForTrainRegressionModel(
         experiments=experiments,
         feature_config=feature_config,
         parquet_diagnostic_names=parquet_diagnostic_names,
@@ -138,7 +137,7 @@ def process(
     if forecast_df is None or truth_df is None or cube_inputs is None:
         return None
 
-    result = PrepareAndTrainDecisionTree(
+    result = PrepareAndTrainRegressionModel(
         feature_config=feature_config,
         target_cf_name=cf_names[0],
         method=method,
@@ -147,7 +146,7 @@ def process(
         unique_site_id_keys=unique_site_id_keys,
         **(model_kwargs or {}),
     )(forecast_df, truth_df, cube_inputs)
-    if result == (None, None, None):
+    if result is None:
         return None
 
     return result

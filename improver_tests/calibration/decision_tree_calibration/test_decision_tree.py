@@ -16,9 +16,9 @@ from iris.cube import Cube
 from iris.pandas import as_data_frame
 from pandas.testing import assert_frame_equal
 
-from improver.calibration.decision_tree import (
-    ApplyDecisionTreeModel,
-    TrainDecisionTreeModel,
+from improver.calibration.regression_model import (
+    ApplyRegressionModel,
+    TrainRegressionModel,
     _check_valid_transformation,
     apply_transformation,
     lightgbm_package_available,
@@ -217,7 +217,7 @@ def _run_train_qrf(
             forecast_df["wind_speed_at_10m"] + 10, dtype=np.float32
         )
 
-    plugin = TrainDecisionTreeModel(
+    plugin = TrainRegressionModel(
         target_name="wind_speed_at_10m",
         feature_config=feature_config,
         method=method,
@@ -956,7 +956,7 @@ def test_apply_qrf(
             ancil_df[["wmo_id", "distance_to_water"]], on=["wmo_id"], how="left"
         )
 
-    plugin = ApplyDecisionTreeModel(
+    plugin = ApplyRegressionModel(
         "wind_speed_at_10m",
         feature_config,
         quantiles,
@@ -1024,7 +1024,7 @@ def test_apply_qrf_alternative_configs(
     forecast_df = _create_forecasts(frt, vt, data)
     forecast_df = _add_day_of_training_period(forecast_df)
 
-    plugin = ApplyDecisionTreeModel(
+    plugin = ApplyRegressionModel(
         "wind_speed_at_10m",
         feature_config,
         quantiles,
@@ -1063,7 +1063,7 @@ def test_xgboost_package_available():
     assert result == expected
 
 
-def test_train_decision_tree_lightgbm():
+def test_train_regression_model_lightgbm():
     """Test TrainDecisionTreeModel using the lightgbm method."""
     lgb = pytest.importorskip("lightgbm")
 
@@ -1085,7 +1085,7 @@ def test_train_decision_tree_lightgbm():
     assert isinstance(result, np.ndarray)
 
 
-def test_train_decision_tree_xgboost():
+def test_train_regression_model_xgboost():
     """Test TrainDecisionTreeModel using the xgboost method."""
     xgb = pytest.importorskip("xgboost")
 
@@ -1107,10 +1107,10 @@ def test_train_decision_tree_xgboost():
     assert isinstance(result, np.ndarray)
 
 
-def test_train_decision_tree_unsupported_method():
+def test_train_regression_model_unsupported_method():
     """Test that an unsupported method raises a ValueError."""
     feature_config = {"wind_speed_at_10m": ["mean"]}
-    with pytest.raises(ValueError, match="Unsupported decision tree method 'catboost'"):
+    with pytest.raises(ValueError, match="Unsupported regression method 'catboost'"):
         _run_train_qrf(
             feature_config,
             n_estimators=2,
@@ -1124,7 +1124,7 @@ def test_train_decision_tree_unsupported_method():
         )
 
 
-def test_apply_decision_tree_quantile_sorting_lightgbm():
+def test_apply_regression_model_quantile_sorting_lightgbm():
     """Test that ApplyDecisionTreeModel sorts predictions across quantiles for
     lightgbm, guarding against quantile crossing when multiple quantile-level
     models produce out-of-order outputs."""
@@ -1146,7 +1146,7 @@ def test_apply_decision_tree_quantile_sorting_lightgbm():
     forecast_df = _create_forecasts(frt, vt, data)
     forecast_df = _add_day_of_training_period(forecast_df)
 
-    plugin = ApplyDecisionTreeModel(
+    plugin = ApplyRegressionModel(
         "wind_speed_at_10m",
         feature_config,
         quantiles,

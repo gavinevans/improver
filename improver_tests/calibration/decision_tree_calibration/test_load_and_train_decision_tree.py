@@ -2,17 +2,18 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Unit tests for the LoadForTrainDecisionTree and PrepareAndTrainDecisionTree plugins."""
+"""Unit tests for the load/train regression model plugins."""
 
 import iris
 import numpy as np
 import pandas as pd
 import pytest
 
-from improver.calibration.load_and_train_decision_tree import (
-    LoadForTrainDecisionTree,
-    PrepareAndTrainDecisionTree,
+from improver.calibration.load_and_train_regression_model import (
+    LoadForTrainRegressionModel,
+    PrepareAndTrainRegressionModel,
 )
+from improver.calibration.regression_model import RegressionModelArtifact
 from improver.synthetic_data.set_up_test_cubes import set_up_spot_variable_cube
 
 pytest.importorskip("quantile_forest")
@@ -574,7 +575,7 @@ def test_load_for_qrf(
     truth_creation,
     forecast_periods,
 ):
-    """Test the LoadForTrainDecisionTree plugin."""
+    """Test the LoadForTrainRegressionModel plugin."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
     parquet_diagnostic_names = ["temperature_at_screen_level"]
     cf_names = ["air_temperature"]
@@ -597,9 +598,7 @@ def test_load_for_qrf(
         experiments.append("recentblend")
 
     if include_static:
-        ancil_path, expected_cube = _create_ancil_file(
-            tmp_path, sorted(list(set(site_ids)))
-        )
+        ancil_path, expected_cube = _create_ancil_file(tmp_path, sorted(set(site_ids)))
         file_paths.append(ancil_path)
         feature_config["distance_to_water"] = ["static"]
 
@@ -624,8 +623,8 @@ def test_load_for_qrf(
         expected_truth_df, "temperature_at_screen_level"
     )
 
-    # Create an instance of LoadForTrainDecisionTree with the required parameters
-    plugin = LoadForTrainDecisionTree(
+    # Create an instance of LoadForTrainRegressionModel with the required parameters
+    plugin = LoadForTrainRegressionModel(
         experiments=experiments,
         feature_config=feature_config,
         parquet_diagnostic_names=parquet_diagnostic_names,
@@ -675,7 +674,7 @@ def test_load_for_qrf_with_mixed_whitespace_padding_in_forecast_inputs(tmp_path)
         forecast_path / "forecast.parquet", index=False, engine="pyarrow"
     )
 
-    plugin = LoadForTrainQRF(
+    plugin = LoadForTrainRegressionModel(
         experiments=["latestblend", "recentblend"],
         feature_config={
             "air_temperature": ["mean", "std", "altitude"],
@@ -715,7 +714,7 @@ def test_load_for_qrf_with_mixed_whitespace_padding_in_forecast_inputs(tmp_path)
 
 @pytest.mark.parametrize("make_files", [False, True])
 def test_load_for_qrf_no_paths(tmp_path, make_files):
-    """Test the LoadForTrainDecisionTree plugin when the no valid file paths are provided.
+    """Test the LoadForTrainRegressionModel plugin when no valid file paths are provided.
     Either the paths do not exist, or the paths exist but the directories are empty."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
 
@@ -727,7 +726,7 @@ def test_load_for_qrf_no_paths(tmp_path, make_files):
         for file_path in file_paths:
             (tmp_path / file_path).mkdir(parents=True, exist_ok=True)
 
-    plugin = LoadForTrainDecisionTree(
+    plugin = LoadForTrainRegressionModel(
         experiments=["latestblend"],
         feature_config=feature_config,
         parquet_diagnostic_names=["temperature_at_screen_level"],
@@ -771,7 +770,7 @@ def test_load_for_qrf_mismatches(
     cycletime,
     forecast_periods,
 ):
-    """Test the LoadForTrainDecisionTree plugin when the cycletime or forecast_periods
+    """Test the LoadForTrainRegressionModel plugin when cycletime or forecast_periods
     requested are not present in the provided files."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
     representation = "percentile"
@@ -793,7 +792,7 @@ def test_load_for_qrf_mismatches(
 
     file_paths = [forecast_path, truth_path]
 
-    plugin = LoadForTrainDecisionTree(
+    plugin = LoadForTrainRegressionModel(
         experiments=["latestblend"],
         feature_config=feature_config,
         parquet_diagnostic_names=["temperature_at_screen_level"],
@@ -877,13 +876,6 @@ def test_load_for_qrf_mismatches(
             "1:2:3:4",
             "percentile",
         ),
-        (
-            "no_quantile_forest_package",
-            _create_multi_site_forecast_parquet_file,
-            _create_multi_site_truth_parquet_file,
-            "6:18:6",
-            "percentile",
-        ),
     ],
 )
 def test_unexpected_loading(
@@ -894,7 +886,7 @@ def test_unexpected_loading(
     forecast_periods,
     representation,
 ):
-    """Test LoadForTrainDecisionTree plugin behaviour in atypical situations."""
+    """Test LoadForTrainRegressionModel plugin behaviour in atypical situations."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
 
     forecast_path, _, _ = forecast_creation(tmp_path, representation)
@@ -915,7 +907,7 @@ def test_unexpected_loading(
         cf_names.append("wind_speed")
         # Intentionally not appending to experiments to create a mismatch
         with pytest.raises(ValueError, match="The length of the"):
-            LoadForTrainDecisionTree(
+            LoadForTrainRegressionModel(
                 experiments=experiments,
                 feature_config=feature_config,
                 parquet_diagnostic_names=parquet_diagnostic_names,
@@ -926,8 +918,8 @@ def test_unexpected_loading(
             )
         return
 
-    # Create an instance of LoadForTrainDecisionTree with the required parameters
-    plugin = LoadForTrainDecisionTree(
+    # Create an instance of LoadForTrainRegressionModel with the required parameters
+    plugin = LoadForTrainRegressionModel(
         experiments=experiments,
         feature_config=feature_config,
         parquet_diagnostic_names=parquet_diagnostic_names,
@@ -976,10 +968,6 @@ def test_unexpected_loading(
     ):
         with pytest.raises(ValueError, match="exactly 3 parts"):
             plugin(file_paths)
-    elif exception == "no_quantile_forest_package":
-        plugin.quantile_forest_installed = False
-        result = plugin(file_paths)
-        assert result == (None, None, None)
     else:
         raise ValueError(f"Unknown exception type: {exception}")
 
@@ -1035,7 +1023,7 @@ def test_prepare_and_train_qrf(
     truth_creation,
     forecast_periods,
 ):
-    """Test the PrepareAndTrainDecisionTree plugin."""
+    """Test the PrepareAndTrainRegressionModel plugin."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
     n_estimators = 2
     max_depth = 5
@@ -1065,7 +1053,7 @@ def test_prepare_and_train_qrf(
     if include_static:
         _, ancil_cube = _create_ancil_file(
             tmp_path,
-            sorted(list(set(site_ids))),
+            sorted(set(site_ids)),
         )
         feature_config["distance_to_water"] = ["static"]
 
@@ -1099,8 +1087,8 @@ def test_prepare_and_train_qrf(
     if include_static:
         plugin_inputs["cube_inputs"] = iris.cube.CubeList([ancil_cube])
 
-    # Create an instance of PrepareAndTrainDecisionTree with the required parameters
-    plugin = PrepareAndTrainDecisionTree(
+    # Create an instance of PrepareAndTrainRegressionModel with the required parameters
+    plugin = PrepareAndTrainRegressionModel(
         feature_config=feature_config,
         target_cf_name=target_cf_name,
         method="qrf",
@@ -1121,13 +1109,16 @@ def test_prepare_and_train_qrf(
         with pytest.raises(ValueError, match="Empty truth DataFrame"):
             plugin(**plugin_inputs)
         return
-    qrf_model, transformation, pre_transform_addition = plugin(**plugin_inputs)
+    artifact = plugin(**plugin_inputs)
+    assert isinstance(artifact, RegressionModelArtifact)
+    qrf_model = artifact.model
 
     assert qrf_model.n_estimators == n_estimators
     assert qrf_model.max_depth == max_depth
     assert qrf_model.random_state == random_state
-    assert transformation == "log"
-    assert pre_transform_addition == 1
+    assert artifact.transformation == "log"
+    assert artifact.pre_transform_addition == 1
+    assert artifact.method == "qrf"
 
     current_forecast = [5.64, 3, 55]
 
@@ -1213,8 +1204,8 @@ def test_filter_bad_sites(
         else:
             truth_df.loc[1, "latitude"] = pd.NA
 
-    # Create an instance of PrepareAndTrainDecisionTree with the required parameters
-    plugin = PrepareAndTrainDecisionTree(
+    # Create an instance of PrepareAndTrainRegressionModel with the required parameters
+    plugin = PrepareAndTrainRegressionModel(
         feature_config=feature_config,
         target_cf_name=target_cf_name,
         method="qrf",
@@ -1225,11 +1216,7 @@ def test_filter_bad_sites(
         pre_transform_addition=1,
         unique_site_id_keys=site_id,
     )
-    if include_nans and truth_df["ob_value"].isna().all():
-        with pytest.raises(ValueError, match="Empty truth DataFrame"):
-            plugin.filter_bad_sites(forecast_df.copy(), truth_df.copy())
-        return
-    elif (
+    if (include_nans and truth_df["ob_value"].isna().all()) or (
         include_latlon_nans
         and truth_df["latitude"].isna().all()
         and site_id
@@ -1262,7 +1249,7 @@ def test_filter_bad_sites(
 def test_unexpected_preparation(
     tmp_path,
 ):
-    """Test the PrepareAndTrainDecisionTree plugin for atypical situations."""
+    """Test the PrepareAndTrainRegressionModel plugin for atypical situations."""
     feature_config = {"air_temperature": ["mean", "std", "altitude"]}
     n_estimators = 2
     max_depth = 5
@@ -1274,7 +1261,7 @@ def test_unexpected_preparation(
 
     truth_df.loc[:, "time"] = pd.Timestamp("2020-01-01 00:00:00", tz="utc")
 
-    plugin = PrepareAndTrainDecisionTree(
+    plugin = PrepareAndTrainRegressionModel(
         feature_config=feature_config,
         target_cf_name=target_cf_name,
         method="qrf",
@@ -1286,4 +1273,4 @@ def test_unexpected_preparation(
         UserWarning, match="No matching times between the forecast and truth data."
     ):
         result = plugin(forecast_df, truth_df)
-    assert result == (None, None, None)
+    assert result is None

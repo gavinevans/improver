@@ -3,7 +3,7 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Script to apply a trained decision tree model."""
+"""Script to apply a trained regression model."""
 
 from improver import cli
 
@@ -20,9 +20,9 @@ def process(
     forecast_period: int = None,
     max_allowed_difference: float = None,
 ):
-    """Applying the Quantile Regression Random Forest model.
+    """Applying a trained regression model.
 
-    Loads in arguments for applying a trained decision tree
+    Loads in arguments for applying a trained regression
     model which has been previously trained.
     Two sources of input data must be provided: The trained model and the forecast cube
     to be calibrated. The output is a NetCDF file containing the calibrated forecast.
@@ -30,11 +30,8 @@ def process(
     Args:
         file_paths (cli.inputpaths):
             A list of input paths containing:
-            - The path to the pickle file produced by training the decision tree model.
-            The pickle file contains the trained model and the transformation and
-            pre_transform_addition values if a transformation was applied. If no
-            transformation was applied then the transformation and
-            pre_transform_addition values will be None and 0, respectively.
+            - The path to the pickle file produced by training the regression model.
+            The pickle file contains a versioned model artifact.
             - The path to a NetCDF file containing the forecast to be calibrated.
             - Optionally, paths to NetCDF files containing additional predictors.
         feature_config (dict):
@@ -58,7 +55,7 @@ def process(
             calibrated e.g. air_temperature. This will be used to separate it from
             the rest of the feature cubes, if present.
         method (str):
-            The decision tree method used to train the model. Supported values are
+            The regression method used to train the model. Supported values are
             ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``. Defaults to ``"qrf"``.
         unique_site_id_keys (str):
             The names of the coordinates that uniquely identify each site,
@@ -79,13 +76,13 @@ def process(
             The calibrated forecast cube.
     """
     from improver.calibration import split_netcdf_parquet_pickle
-    from improver.calibration.load_and_apply_decision_tree import (
-        PrepareAndApplyDecisionTree,
+    from improver.calibration.load_and_apply_regression_model import (
+        PrepareAndApplyRegressionModel,
     )
 
-    cubes, _, model_descriptors = split_netcdf_parquet_pickle(file_paths)
+    cubes, _, model_artifact = split_netcdf_parquet_pickle(file_paths)
 
-    result = PrepareAndApplyDecisionTree(
+    result = PrepareAndApplyRegressionModel(
         feature_config=feature_config,
         target_cf_name=target_cf_name,
         method=method,
@@ -93,5 +90,5 @@ def process(
         cycletime=cycletime,
         forecast_period=forecast_period,
         max_allowed_difference=max_allowed_difference,
-    )(cubes, model_descriptors=model_descriptors)
+    )(cubes, model_artifact=model_artifact)
     return result

@@ -2,9 +2,10 @@
 #
 # This file is part of 'IMPROVER' and is released under the BSD 3-Clause license.
 # See LICENSE in the root of the repository for full licensing details.
-"""Plugins for training and applying decision tree models."""
+"""Plugins for training and applying regression models."""
 
-from typing import Any, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -13,12 +14,97 @@ from improver import BasePlugin, PostProcessingPlugin
 from improver.calibration.dataframe_utilities import quantile_check
 from improver.constants import DAYS_IN_YEAR, HOURS_IN_DAY
 
-try:
-    from quantile_forest import RandomForestQuantileRegressor
-except ModuleNotFoundError:
-    # Define empty class to avoid type hint errors.
-    class RandomForestQuantileRegressor:
-        pass
+ARTIFACT_SCHEMA_VERSION = 1
+
+
+@dataclass
+class RegressionModelArtifact:
+    """Container for trained regression model metadata and payload."""
+
+    schema_version: int
+    method: str
+    model: Any
+    target_name: str
+    feature_config: dict[str, list[str]]
+    transformation: Optional[str]
+    pre_transform_addition: float
+    unique_site_id_keys: list[str]
+    quantiles_policy: str = "derived_from_input_representation"
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        method: str,
+        model: Any,
+        target_name: str,
+        feature_config: dict[str, list[str]],
+        transformation: Optional[str],
+        pre_transform_addition: float,
+        unique_site_id_keys: list[str],
+    ) -> "RegressionModelArtifact":
+        """Create a versioned regression model artifact."""
+        return cls(
+            schema_version=ARTIFACT_SCHEMA_VERSION,
+            method=method,
+            model=model,
+            target_name=target_name,
+            feature_config=feature_config,
+            transformation=transformation,
+            pre_transform_addition=pre_transform_addition,
+            unique_site_id_keys=unique_site_id_keys,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "RegressionModelArtifact":
+        """Construct an artifact from a serialized payload."""
+        if isinstance(payload, cls):
+            artifact = payload
+        elif isinstance(payload, dict):
+            required_fields = {
+                "schema_version",
+                "method",
+                "model",
+                "target_name",
+                "feature_config",
+                "transformation",
+                "pre_transform_addition",
+                "unique_site_id_keys",
+            }
+            missing_fields = required_fields - set(payload.keys())
+            if missing_fields:
+                msg = (
+                    "The model artifact is missing required fields: "
+                    f"{sorted(missing_fields)}."
+                )
+                raise ValueError(msg)
+            artifact = cls(**payload)
+        else:
+            msg = (
+                "Expected the model artifact to be a RegressionModelArtifact "
+                "instance or a dictionary payload."
+            )
+            raise ValueError(msg)
+
+        if artifact.schema_version != ARTIFACT_SCHEMA_VERSION:
+            msg = (
+                "Unsupported model artifact schema version "
+                f"{artifact.schema_version}. Expected "
+                f"{ARTIFACT_SCHEMA_VERSION}."
+            )
+            raise ValueError(msg)
+
+        if isinstance(artifact.unique_site_id_keys, str):
+            artifact.unique_site_id_keys = [artifact.unique_site_id_keys]
+        return artifact
+
+
+@dataclass(frozen=True)
+class BackendSpec:
+    """Backend-specific constructor and prediction hooks."""
+
+    constructor: Callable[[dict[str, Any]], Any]
+    predict_quantiles: Callable[[Any, np.ndarray, list[np.float32]], np.ndarray]
 
 
 def quantile_forest_package_available():
@@ -46,6 +132,82 @@ def xgboost_package_available():
     except ModuleNotFoundError:
         return False
     return True
+
+
+def _construct_qrf(model_kwargs: dict[str, Any]) -> Any:
+    try:
+        from quantile_forest import RandomForestQuantileRegressor
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "The quantile_forest package is required to use method='qrf'. "
+            "Install it with: pip install quantile-forest"
+        )
+    return RandomForestQuantileRegressor(**model_kwargs)
+
+
+def _construct_lightgbm(model_kwargs: dict[str, Any]) -> Any:
+    try:
+        import lightgbm as lgb
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "The lightgbm package is required to use method='lightgbm'. "
+            "Install it with: pip install lightgbm"
+        )
+    return lgb.LGBMRegressor(**model_kwargs)
+
+
+def _construct_xgboost(model_kwargs: dict[str, Any]) -> Any:
+    try:
+        import xgboost as xgb
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "The xgboost package is required to use method='xgboost'. "
+            "Install it with: pip install xgboost"
+        )
+    return xgb.XGBRegressor(**model_kwargs)
+
+
+def _predict_qrf(model: Any, feature_values: np.ndarray, quantiles: list[np.float32]):
+    return model.predict(feature_values, quantiles=quantiles)
+
+
+def _predict_gbm_or_xgb(
+    model: Any, feature_values: np.ndarray, quantiles: list[np.float32]
+) -> np.ndarray:
+    del quantiles
+    calibrated_forecast = model.predict(feature_values)
+    # Independently trained quantile-level models can cross. Sort along the
+    # quantile axis to enforce non-decreasing order.
+    if calibrated_forecast.ndim > 1:
+        calibrated_forecast = np.sort(calibrated_forecast, axis=1)
+    return calibrated_forecast
+
+
+BACKEND_REGISTRY = {
+    "qrf": BackendSpec(
+        constructor=_construct_qrf,
+        predict_quantiles=_predict_qrf,
+    ),
+    "lightgbm": BackendSpec(
+        constructor=_construct_lightgbm,
+        predict_quantiles=_predict_gbm_or_xgb,
+    ),
+    "xgboost": BackendSpec(
+        constructor=_construct_xgboost,
+        predict_quantiles=_predict_gbm_or_xgb,
+    ),
+}
+
+
+def get_backend_spec(method: str) -> BackendSpec:
+    """Return the backend configuration for the requested method."""
+    backend_spec = BACKEND_REGISTRY.get(method)
+    if backend_spec is None:
+        raise ValueError(
+            f"Unsupported regression method '{method}'. "
+            "Supported methods are: 'qrf', 'lightgbm', 'xgboost'."
+        )
+    return backend_spec
 
 
 def prep_feature(
@@ -212,7 +374,7 @@ def sanitise_forecast_dataframe(
 
     Args:
         df: Input DataFrame, potentially including some computed features.
-        feature_config: Feature configuration defining the features to be used for the decision tree model.
+        feature_config: Feature configuration defining the features to be used for the regression model.
     """
     representation_name = [n for n in ["percentile", "realization"] if n in df.columns][
         0
@@ -278,11 +440,11 @@ def prep_features_from_config(
     unique_site_id_keys: Union[list[str], str] = "wmo_id",
 ) -> tuple[pd.DataFrame, list[str]]:
     """Process the feature_config to prepare the features as required and return the
-    expected column names that will be used as features with the decision tree model.
+    expected column names that will be used as features with the regression model.
 
     Args:
         df: Input DataFrame.
-        feature_config: Feature configuration defining the features to be used for the decision tree model.
+        feature_config: Feature configuration defining the features to be used for the regression model.
         transformation: Transformation to be applied to the data before fitting. This
             is only used when computing members_below or members_above features.
         pre_transform_addition: Value to be added before transformation. This is only
@@ -291,7 +453,7 @@ def prep_features_from_config(
             each site, e.g. "wmo_id" or ["latitude", "longitude"].
     Returns:
         Processed DataFrame and a list of expected column names that will be used as
-        features with the decision tree model.
+        features with the regression model.
     Raises:
         ValueError: If a variable expected in the feature_config is not present in
         the DataFrame e.g. "surface temperature".
@@ -369,8 +531,8 @@ def apply_transformation(
     return data
 
 
-class TrainDecisionTreeModel(BasePlugin):
-    """Plugin to train a decision tree model (e.g. QRF, LightGBM, XGBoost)."""
+class TrainRegressionModel(BasePlugin):
+    """Plugin to train a regression model (e.g. QRF, LightGBM, XGBoost)."""
 
     def __init__(
         self,
@@ -405,7 +567,7 @@ class TrainDecisionTreeModel(BasePlugin):
                 "distance_to_water": ["static"],
                 }
             method (str):
-                Name of the decision tree method to use. Supported values are
+                Name of the regression method to use. Supported values are
                 ``"qrf"`` (via the ``quantile_forest`` package),
                 ``"lightgbm"`` (gradient-boosted trees via the ``lightgbm``
                 package), and ``"xgboost"`` (gradient-boosted trees via the
@@ -445,7 +607,7 @@ class TrainDecisionTreeModel(BasePlugin):
         self.valid_forecast_proportion = valid_forecast_proportion
 
     def fit_model(self, forecast_features: np.ndarray, target: np.ndarray) -> Any:
-        """Construct and fit the decision tree model selected by ``self.method``.
+        """Construct and fit the regression model selected by ``self.method``.
 
         Args:
             forecast_features (numpy.ndarray):
@@ -457,31 +619,7 @@ class TrainDecisionTreeModel(BasePlugin):
         Raises:
             ValueError: If ``self.method`` is not a supported method name.
         """
-        if self.method == "qrf":
-            model = RandomForestQuantileRegressor(**self.model_kwargs)
-        elif self.method == "lightgbm":
-            try:
-                import lightgbm as lgb
-            except ModuleNotFoundError:
-                raise ModuleNotFoundError(
-                    "The lightgbm package is required to use method='lightgbm'. "
-                    "Install it with: pip install lightgbm"
-                )
-            model = lgb.LGBMRegressor(**self.model_kwargs)
-        elif self.method == "xgboost":
-            try:
-                import xgboost as xgb
-            except ModuleNotFoundError:
-                raise ModuleNotFoundError(
-                    "The xgboost package is required to use method='xgboost'. "
-                    "Install it with: pip install xgboost"
-                )
-            model = xgb.XGBRegressor(**self.model_kwargs)
-        else:
-            raise ValueError(
-                f"Unsupported decision tree method '{self.method}'. "
-                "Supported methods are: 'qrf', 'lightgbm', 'xgboost'."
-            )
+        model = get_backend_spec(self.method).constructor(self.model_kwargs)
         model.fit(forecast_features, target)
         return model
 
@@ -490,7 +628,7 @@ class TrainDecisionTreeModel(BasePlugin):
         forecast_df: pd.DataFrame,
         truth_df: pd.DataFrame,
     ) -> Any:
-        """Train the decision tree model specified by ``self.method``.
+        """Train the regression model specified by ``self.method``.
 
         Args:
             forecast_df:
@@ -551,12 +689,12 @@ class TrainDecisionTreeModel(BasePlugin):
         target_values = combined_df["ob_value"].values
         del combined_df
 
-        # Fit the decision tree model
+        # Fit the regression model.
         return self.fit_model(feature_values, target_values)
 
 
-class ApplyDecisionTreeModel(PostProcessingPlugin):
-    """Plugin to apply a trained decision tree model (e.g. QRF, LightGBM, XGBoost)."""
+class ApplyRegressionModel(PostProcessingPlugin):
+    """Plugin to apply a trained regression model."""
 
     def __init__(
         self,
@@ -596,7 +734,7 @@ class ApplyDecisionTreeModel(PostProcessingPlugin):
                 quantile from training, so ``quantiles`` is used only for output
                 labelling by the caller.
             method (str):
-                Name of the decision tree method that was used to train the model.
+                Name of the regression method that was used to train the model.
                 Supported values are ``"qrf"``, ``"lightgbm"``, and ``"xgboost"``.
             transformation (str):
                 Transformation to be applied to the data before fitting.
@@ -638,10 +776,10 @@ class ApplyDecisionTreeModel(PostProcessingPlugin):
         model: Any,
         forecast_df: pd.DataFrame,
     ) -> np.ndarray:
-        """Apply a trained decision tree model.
+        """Apply a trained regression model.
 
         Args:
-            model: A trained decision tree model (QRF, LightGBM or XGBoost).
+            model: A trained model (QRF, LightGBM or XGBoost).
             forecast_df: DataFrame containing the forecast information and features.
 
         Returns:
@@ -676,23 +814,10 @@ class ApplyDecisionTreeModel(PostProcessingPlugin):
         feature_values = np.array(forecast_df[feature_column_names])
         del forecast_df
 
-        if self.method == "qrf":
-            calibrated_forecast = model.predict(
-                feature_values, quantiles=self.quantiles
-            )
-        elif self.method in ("lightgbm", "xgboost"):
-            calibrated_forecast = model.predict(feature_values)
-            # Gradient-boosted quantile models are trained independently per
-            # quantile level and are not guaranteed to produce monotonically
-            # ordered outputs across quantiles (quantile crossing). Sort along
-            # the quantile axis to enforce non-decreasing order.
-            if calibrated_forecast.ndim > 1:
-                calibrated_forecast = np.sort(calibrated_forecast, axis=1)
-        else:
-            raise ValueError(
-                f"Unsupported decision tree method '{self.method}'. "
-                "Supported methods are: 'qrf', 'lightgbm', 'xgboost'."
-            )
+        backend_spec = get_backend_spec(self.method)
+        calibrated_forecast = backend_spec.predict_quantiles(
+            model, feature_values, self.quantiles
+        )
         calibrated_forecast = self._reverse_transformation(calibrated_forecast)
         calibrated_forecast = calibrated_forecast.astype(np.float32, copy=False)
 
